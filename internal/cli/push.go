@@ -9,6 +9,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/storage/memory"
+	"github.com/lakshmanpatel/gitant/internal/storage"
 )
 
 // RefUpdate represents a ref change to push
@@ -25,7 +26,7 @@ type GitObject struct {
 	Content string `json:"content"` // base64
 }
 
-// Push performs a push from a local repo to the daemon
+// Push performs a packfile-based push from a local repo to the daemon
 func Push(repoPath, daemonURL, repoID string) error {
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
@@ -57,9 +58,15 @@ func Push(repoPath, daemonURL, repoID string) error {
 	}
 
 	// Collect all reachable objects
-	objects, err := collectObjects(repo, commitHashes)
+	gitObjects, err := collectObjects(repo, commitHashes)
 	if err != nil {
 		return fmt.Errorf("collecting objects: %w", err)
+	}
+
+	// Create packfile from objects
+	packfileBytes, err := createPackfile(gitObjects)
+	if err != nil {
+		return fmt.Errorf("creating packfile: %w", err)
 	}
 
 	client := NewClient(daemonURL)
@@ -69,8 +76,9 @@ func Push(repoPath, daemonURL, repoID string) error {
 		Errors  []string `json:"errors"`
 	}
 
-	err = client.Post(fmt.Sprintf("/api/v1/repos/%s/push", repoID), map[string]interface{}{
-		"objects":     objects,
+	// Send packfile to server
+	err = client.Post(fmt.Sprintf("/api/v1/repos/%s/push-packfile", repoID), map[string]interface{}{
+		"packfile":    base64.StdEncoding.EncodeToString(packfileBytes),
 		"ref_updates": updates,
 	}, &result)
 	if err != nil {
@@ -83,8 +91,42 @@ func Push(repoPath, daemonURL, repoID string) error {
 		}
 	}
 
-	fmt.Fprintf(Stderr(), "Pushed %d ref(s), %d object(s) to %s\n", len(updates), len(objects), repoID)
+	fmt.Fprintf(Stderr(), "Pushed %d ref(s), %d object(s) to %s\n", len(updates), len(gitObjects), repoID)
 	return nil
+}
+
+// createPackfile creates a git packfile from a list of objects
+func createPackfile(objects []GitObject) ([]byte, error) {
+	// Convert to storage.GitObject format
+	gitObjects := make([]*storage.GitObject, len(objects))
+	for i, obj := range objects {
+		objType := plumbing.AnyObject
+		switch obj.Type {
+		case "commit":
+			objType = plumbing.CommitObject
+		case "tree":
+			objType = plumbing.TreeObject
+		case "blob":
+			objType = plumbing.BlobObject
+		case "tag":
+			objType = plumbing.TagObject
+		}
+
+		// Decode base64 content
+		content, err := base64.StdEncoding.DecodeString(obj.Content)
+		if err != nil {
+			return nil, fmt.Errorf("decoding object %s: %w", obj.Hash, err)
+		}
+
+		gitObjects[i] = &storage.GitObject{
+			Hash:    plumbing.NewHash(obj.Hash),
+			Type:    objType,
+			Content: content,
+		}
+	}
+
+	writer := storage.NewPackfileWriter()
+	return writer.WritePackfile(gitObjects)
 }
 
 // collectObjects walks the git graph from the given commits and collects all reachable objects

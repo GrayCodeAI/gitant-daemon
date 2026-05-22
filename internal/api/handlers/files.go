@@ -202,9 +202,10 @@ func SearchCode(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		}
 
 		// Walk tree and search blobs
-		results := searchTree(repo, commit.TreeHash, "", query)
+		offset, limit := ParsePagination(r)
+		results := searchTree(repo, commit.TreeHash, commit.TreeHash, "", query)
 
-		paged, total := PaginateSlice(results, 0, 50) // search capped at 50 results
+		paged, total := PaginateSlice(results, offset, limit)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -216,10 +217,11 @@ func SearchCode(registry *storage.RepositoryRegistry) http.HandlerFunc {
 }
 
 // searchTree recursively walks the tree and finds blobs containing the query
-func searchTree(repo *storage.Repository, treeHash plumbing.Hash, path string, query string) []map[string]interface{} {
+// rootHash is used for GetFileFromTree (full path resolution), currentHash is the subtree being listed
+func searchTree(repo *storage.Repository, rootHash, currentHash plumbing.Hash, path string, query string) []map[string]interface{} {
 	var results []map[string]interface{}
 
-	entries, err := repo.ListTreeEntries(treeHash, path)
+	entries, err := repo.ListTreeEntries(currentHash, "")
 	if err != nil {
 		return results
 	}
@@ -233,10 +235,10 @@ func searchTree(repo *storage.Repository, treeHash plumbing.Hash, path string, q
 		}
 
 		if entry.Mode == filemode.Dir {
-			subResults := searchTree(repo, entry.Hash, entryPath, query)
+			subResults := searchTree(repo, rootHash, entry.Hash, entryPath, query)
 			results = append(results, subResults...)
 		} else {
-			content, err := repo.GetFileFromTree(treeHash, entryPath)
+			content, err := repo.GetFileFromTree(rootHash, entryPath)
 			if err != nil {
 				continue
 			}
@@ -254,7 +256,7 @@ func searchTree(repo *storage.Repository, treeHash plumbing.Hash, path string, q
 						"context": fmt.Sprintf("%s:%d: %s", entryPath, i+1, strings.TrimSpace(context)),
 					})
 
-					if len(results) >= 100 {
+					if len(results) >= 1000 {
 						return results
 					}
 				}

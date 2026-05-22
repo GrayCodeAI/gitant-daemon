@@ -115,6 +115,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/{id}/star", handlers.StarRepo(s.repos))
 			r.Post("/{id}/unstar", handlers.UnstarRepo(s.repos))
 			r.Post("/{id}/push", handlers.PushObjects(s.repos, s.protection, s.webhooks))
+			r.Post("/{id}/push-packfile", handlers.PushPackfile(s.repos, s.protection, s.webhooks))
 			r.Post("/{id}/git-upload-pack", handlers.GitUploadPack(s.repos))
 			r.Post("/{id}/git-receive-pack", handlers.GitReceivePack(s.repos, s.protection, s.webhooks))
 			r.Post("/{id}/issues", handlers.CreateIssue(s.issues, s.webhooks))

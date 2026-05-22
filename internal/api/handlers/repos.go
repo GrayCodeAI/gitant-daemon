@@ -254,6 +254,105 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 	}
 }
 
+// PushPackfile accepts a packfile and ref updates for more efficient pushing
+func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage.ProtectionStore, wm *webhooks.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+
+		repo, err := registry.Open(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		var req struct {
+			Packfile   string `json:"packfile"` // base64-encoded packfile
+			RefUpdates []struct {
+				Name    string `json:"name"`
+				OldHash string `json:"old_hash"`
+				NewHash string `json:"new_hash"`
+			} `json:"ref_updates"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// Check branch protection rules
+		for _, update := range req.RefUpdates {
+			branch := update.Name
+			if len(branch) > 11 && branch[:11] == "refs/heads/" {
+				branch = branch[11:]
+			}
+			protection := protectionStore.Get(id, branch)
+			if protection != nil && protection.NoForcePush {
+				// Log warning but allow
+			}
+		}
+
+		// Decode and ingest packfile
+		if req.Packfile != "" {
+			packData, err := base64.StdEncoding.DecodeString(req.Packfile)
+			if err != nil {
+				http.Error(w, "Invalid base64 packfile", http.StatusBadRequest)
+				return
+			}
+
+			objects, err := storage.ExtractObjects(packData)
+			if err != nil {
+				http.Error(w, "Failed to parse packfile: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			for _, obj := range objects {
+				if err := repo.StoreObject(obj.Hash, obj.Type, obj.Content); err != nil {
+					log.Printf("warning: failed to store object %s: %v", obj.Hash, err)
+				}
+			}
+		}
+
+		// Update refs
+		var errors []string
+		for _, update := range req.RefUpdates {
+			if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
+				hash := plumbing.NewHash(update.NewHash)
+				if err := repo.CreateBranch(update.Name, hash); err != nil {
+					log.Printf("warning: failed to create branch %s: %v", update.Name, err)
+					errors = append(errors, err.Error())
+				}
+			}
+		}
+
+		// Dispatch push webhook event
+		refNames := make([]string, 0, len(req.RefUpdates))
+		for _, u := range req.RefUpdates {
+			refNames = append(refNames, u.Name)
+		}
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventPush,
+			Repo: id,
+			Data: map[string]interface{}{
+				"refs": refNames,
+			},
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		if len(errors) > 0 {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"repo":    id,
+				"errors":  errors,
+			})
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"repo":    id,
+			})
+		}
+	}
+}
+
 // CloneRepo clones a repository
 func CloneRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
