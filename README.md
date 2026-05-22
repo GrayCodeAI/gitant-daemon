@@ -16,7 +16,7 @@ Your node is running at `http://localhost:7777`.
 
 ### From source
 
-Requires Go 1.25+.
+Requires Go 1.26+.
 
 ```bash
 go build -o gitant ./cmd/gitant/
@@ -48,12 +48,12 @@ git init && git add . && git commit -m "init"
 gitant-daemon (Go)
 ├── HTTP API (go-chi)     REST endpoints for repos, issues, PRs, files, commits
 ├── P2P Networking         libp2p (DHT + GossipSub)
-├── Identity               DID:key (Ed25519) + HTTP Signatures (RFC 9421)
-├── Storage                go-git + content-addressed blockstore
+├── Identity               DID:key (Ed25519) + UCAN tokens + HTTP Signatures (RFC 9421)
+├── Storage                go-git + file-per-block content-addressed blockstore
 └── CRDT                   Issues and PRs with Lamport clocks
 
-gitant-mcp (TypeScript)    MCP server for AI agent integration (24 tools)
-gitant-web (Next.js)       Web frontend (13 routes)
+gitant-mcp (TypeScript)    MCP server for AI agent integration (51 tools)
+gitant-web (Next.js)       Web frontend (18 routes, paginated)
 ```
 
 ## CLI Reference
@@ -62,7 +62,7 @@ gitant-web (Next.js)       Web frontend (13 routes)
 |---------|-------------|
 | `gitant serve` | Start the daemon |
 | `gitant init` | Initialize a local repo |
-| `gitant push --repo <id> --remote <url>` | Push to daemon |
+| `gitant push --repo <id> --remote <url>` | Push to daemon (packfile) |
 | `gitant pull --repo <id> --remote <url>` | Pull from daemon |
 | `gitant clone <repo-id> [dir] --remote <url>` | Clone from daemon |
 | `gitant issue list --repo <id>` | List issues |
@@ -73,6 +73,10 @@ gitant-web (Next.js)       Web frontend (13 routes)
 | `gitant pr create --repo <id> --title <t> -s <branch>` | Create PR |
 | `gitant pr merge --repo <id> <id>` | Merge PR |
 | `gitant pr review --repo <id> <id> -v approve` | Review PR |
+| `gitant task list --repo <id>` | List tasks |
+| `gitant task create --repo <id> --title <t>` | Create task |
+| `gitant task claim --repo <id> <id>` | Claim task |
+| `gitant task complete --repo <id> <id>` | Complete task |
 
 ## API
 
@@ -85,9 +89,33 @@ curl http://localhost:7777/health
 # Status
 curl http://localhost:7777/api/v1/status
 
-# List repos
-curl http://localhost:7777/api/v1/repos
+# List repos (paginated)
+curl http://localhost:7777/api/v1/repos?offset=0&limit=20
+
+# Search code
+curl "http://localhost:7777/api/v1/repos/my-project/search?q=function"
 ```
+
+## Authentication
+
+Endpoints that modify state (POST/PUT/DELETE) require authentication via UCAN Bearer tokens:
+
+```bash
+# Generate a DID
+curl -X POST http://localhost:7777/api/v1/agents/generate-did
+
+# Delegate capabilities
+curl -X POST http://localhost:7777/api/v1/agents/<did>/delegate \
+  -H 'Authorization: Bearer <server-ucan>' \
+  -d '{"audience":"<client-did>","resource":"repo:*","actions":["read","write"]}'
+
+# Use the UCAN token
+curl -X POST http://localhost:7777/api/v1/repos \
+  -H 'Authorization: Bearer <ucan-token>' \
+  -d '{"name":"my-repo"}'
+```
+
+GET endpoints are public (no auth required).
 
 ## Configuration
 
