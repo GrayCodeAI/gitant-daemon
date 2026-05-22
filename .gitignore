@@ -1,0 +1,19 @@
+# Compiled binaries
+gitant
+git-remote-gitant
+
+# Build artifacts
+.next/
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test coverage
+coverage.out
+coverage.html
