@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 
 	"github.com/lakshmanpatel/gitant/internal/api"
+	"github.com/lakshmanpatel/gitant/internal/cli"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/lakshmanpatel/gitant/internal/storage"
+	"github.com/lakshmanpatel/gitant/internal/webhooks"
 	"github.com/spf13/cobra"
 )
 
@@ -24,6 +26,11 @@ var serveCmd = &cobra.Command{
 	Long:  "Start the gitant daemon with P2P networking, IPFS storage, and HTTP API.",
 	Run: func(cmd *cobra.Command, args []string) {
 		port, _ := cmd.Flags().GetInt("port")
+		if port == 7777 {
+			if envPort := os.Getenv("GITANT_PORT"); envPort != "" {
+				fmt.Sscanf(envPort, "%d", &port)
+			}
+		}
 		dataDir, _ := cmd.Flags().GetString("data-dir")
 
 		if dataDir == "" {
@@ -61,19 +68,55 @@ var serveCmd = &cobra.Command{
 
 		// Create repository registry
 		reposDir := filepath.Join(dataDir, "repos")
-		repos, err := storage.NewRepositoryRegistry(reposDir)
+		dataStoreDir := filepath.Join(dataDir, "data")
+		if err := os.MkdirAll(dataStoreDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
+			os.Exit(1)
+		}
+
+		repos, err := storage.NewRepositoryRegistry(reposDir, dataStoreDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating repository registry: %v\n", err)
 			os.Exit(1)
 		}
 
-		// Create stores
-		issueStore := crdt.NewIssueStore()
-		prStore := crdt.NewPullRequestStore()
-		blockstore := storage.NewBlockstore()
+		// Create stores with persistence
+		issueStore := crdt.NewIssueStore(filepath.Join(dataStoreDir, "issues.json"))
+		prStore := crdt.NewPullRequestStore(filepath.Join(dataStoreDir, "prs.json"))
+		blockstore := storage.NewBlockstore(filepath.Join(dataStoreDir, "blockstore.json"))
+		labelStore := crdt.NewLabelStore(dataStoreDir)
+		taskStore := crdt.NewTaskStore(dataStoreDir)
+		protectionStore := storage.NewProtectionStore(dataStoreDir)
+
+		// Load persisted data
+		if err := issueStore.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load issues: %v\n", err)
+		}
+		if err := prStore.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load PRs: %v\n", err)
+		}
+		if err := blockstore.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load blockstore: %v\n", err)
+		}
+		if err := labelStore.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load labels: %v\n", err)
+		}
+		if err := taskStore.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load tasks: %v\n", err)
+		}
+		if err := protectionStore.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load protections: %v\n", err)
+		}
+		fmt.Printf("Loaded %d blocks from disk\n", blockstore.Size())
+
+		// Create and load webhook manager
+		webhookManager := webhooks.NewManager()
+		if err := webhookManager.Load(dataStoreDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load webhooks: %v\n", err)
+		}
 
 		// Create and start server
-		server := api.NewServer(port, id, repos, issueStore, prStore, blockstore)
+		server := api.NewServer(port, id, repos, issueStore, prStore, blockstore, labelStore, taskStore, protectionStore, webhookManager)
 		if err := server.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
 			os.Exit(1)
@@ -103,38 +146,45 @@ var initCmd = &cobra.Command{
 
 var pushCmd = &cobra.Command{
 	Use:   "push",
-	Short: "Push objects to remote",
-	Long:  "Push git objects to a remote gitant node.",
+	Short: "Push changes to a remote gitant node",
 	Run: func(cmd *cobra.Command, args []string) {
 		remote, _ := cmd.Flags().GetString("remote")
-		fmt.Printf("Pushing to %s...\n", remote)
-		fmt.Println("TODO: Implement push")
+		repo, _ := cmd.Flags().GetString("repo")
+		if err := cli.Push(".", remote, repo); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	},
 }
 
 var pullCmd = &cobra.Command{
 	Use:   "pull",
-	Short: "Pull objects from remote",
-	Long:  "Pull git objects from a remote gitant node.",
+	Short: "Pull changes from a remote gitant node",
 	Run: func(cmd *cobra.Command, args []string) {
 		remote, _ := cmd.Flags().GetString("remote")
-		fmt.Printf("Pulling from %s...\n", remote)
-		fmt.Println("TODO: Implement pull")
+		repo, _ := cmd.Flags().GetString("repo")
+		if err := cli.Pull(".", remote, repo); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	},
 }
 
 var cloneCmd = &cobra.Command{
-	Use:   "clone",
-	Short: "Clone a repository",
-	Long:  "Clone a repository from a remote gitant node.",
+	Use:   "clone [repo-id] [directory]",
+	Short: "Clone a repository from a gitant node",
+	Args:  cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) == 0 {
-			fmt.Fprintf(os.Stderr, "Usage: gitant clone <remote>\n")
+		repoID := args[0]
+		dir := repoID
+		if len(args) > 1 {
+			dir = args[1]
+		}
+		remote, _ := cmd.Flags().GetString("remote")
+		if err := cli.Clone(remote, repoID, dir); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		remote := args[0]
-		fmt.Printf("Cloning from %s...\n", remote)
-		fmt.Println("TODO: Implement clone")
 	},
 }
 
@@ -142,8 +192,13 @@ func init() {
 	serveCmd.Flags().IntP("port", "p", 7777, "Port to listen on")
 	serveCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")
 
-	pushCmd.Flags().StringP("remote", "r", "", "Remote to push to")
-	pullCmd.Flags().StringP("remote", "r", "", "Remote to pull from")
+	pushCmd.Flags().StringP("remote", "r", "http://localhost:7777", "Remote daemon URL")
+	pushCmd.Flags().String("repo", "", "Repository name (required)")
+	pushCmd.MarkFlagRequired("repo")
+	pullCmd.Flags().StringP("remote", "r", "http://localhost:7777", "Remote daemon URL")
+	pullCmd.Flags().String("repo", "", "Repository name (required)")
+	pullCmd.MarkFlagRequired("repo")
+	cloneCmd.Flags().StringP("remote", "r", "http://localhost:7777", "Remote daemon URL")
 
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(initCmd)

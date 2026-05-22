@@ -1,11 +1,19 @@
 package storage
 
 import (
+	"encoding/base64"
 	"fmt"
 	"sync"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/lakshmanpatel/gitant/internal/persistence"
 )
+
+// blockstoreData is the JSON-serializable representation
+type blockstoreData struct {
+	Blocks map[string]string    `json:"blocks"` // hash -> base64 content
+	Index  map[string]plumbing.Hash `json:"index"`
+}
 
 // Blockstore provides content-addressed storage for git objects
 // This is the bridge between git objects and IPFS blocks
@@ -13,14 +21,70 @@ type Blockstore struct {
 	mu      sync.RWMutex
 	blocks  map[string][]byte
 	index   map[string]plumbing.Hash
+	path    string // persistence file path
 }
 
 // NewBlockstore creates a new blockstore
-func NewBlockstore() *Blockstore {
+func NewBlockstore(path string) *Blockstore {
 	return &Blockstore{
 		blocks: make(map[string][]byte),
 		index:  make(map[string]plumbing.Hash),
+		path:   path,
 	}
+}
+
+// Load reads persisted blocks from disk
+func (bs *Blockstore) Load() error {
+	if bs.path == "" {
+		return nil
+	}
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	var data blockstoreData
+	if err := persistence.LoadJSON(bs.path, &data); err != nil {
+		return err
+	}
+	if data.Blocks != nil {
+		for k, v := range data.Blocks {
+			decoded, err := base64.StdEncoding.DecodeString(v)
+			if err != nil {
+				continue
+			}
+			bs.blocks[k] = decoded
+		}
+	}
+	if data.Index != nil {
+		bs.index = data.Index
+	}
+	return nil
+}
+
+// Save writes all blocks to disk
+func (bs *Blockstore) Save() error {
+	if bs.path == "" {
+		return nil
+	}
+	bs.mu.RLock()
+	blocks := make(map[string][]byte, len(bs.blocks))
+	for k, v := range bs.blocks {
+		blocks[k] = v
+	}
+	index := make(map[string]plumbing.Hash, len(bs.index))
+	for k, v := range bs.index {
+		index[k] = v
+	}
+	bs.mu.RUnlock()
+
+	encoded := make(map[string]string, len(blocks))
+	for k, v := range blocks {
+		encoded[k] = base64.StdEncoding.EncodeToString(v)
+	}
+	data := blockstoreData{
+		Blocks: encoded,
+		Index:  index,
+	}
+	return persistence.SaveJSON(bs.path, data)
 }
 
 // Put stores a block with its content hash as key
@@ -67,7 +131,7 @@ func (bs *Blockstore) Delete(hash plumbing.Hash) error {
 	delete(bs.blocks, key)
 	delete(bs.index, key)
 
-	return nil
+	return bs.Save()
 }
 
 // List returns all block hashes in the store
@@ -103,6 +167,11 @@ func (bs *Blockstore) PutAll(blocks map[plumbing.Hash][]byte) error {
 	}
 
 	return nil
+}
+
+// SaveBlock persists after a mutation (convenience for handlers)
+func (bs *Blockstore) SaveBlock() error {
+	return bs.Save()
 }
 
 // GetAll retrieves multiple blocks by their hashes

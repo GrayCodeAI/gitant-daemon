@@ -1,8 +1,78 @@
 package crdt
 
 import (
+	"encoding/json"
+	"sort"
 	"time"
 )
+
+// prSnapshot is the JSON-serializable representation of a PullRequest
+type prSnapshot struct {
+	ID           string       `json:"id"`
+	Title        string       `json:"title"`
+	Body         string       `json:"body"`
+	Status       Status       `json:"status"`
+	Author       string       `json:"author"`
+	SourceBranch string       `json:"source_branch"`
+	TargetBranch string       `json:"target_branch"`
+	Labels       []string     `json:"labels"`
+	Assignee     string       `json:"assignee"`
+	Reviewers    []string     `json:"reviewers"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+	Log          []*Operation `json:"log"`
+}
+
+// MarshalJSON serializes a PullRequest including its operation log
+func (pr *PullRequest) MarshalJSON() ([]byte, error) {
+	snap := prSnapshot{
+		ID:           pr.ID,
+		Title:        pr.Title,
+		Body:         pr.Body,
+		Status:       pr.Status,
+		Author:       pr.Author,
+		SourceBranch: pr.SourceBranch,
+		TargetBranch: pr.TargetBranch,
+		Labels:       pr.Labels,
+		Assignee:     pr.Assignee,
+		Reviewers:    pr.Reviewers,
+		CreatedAt:    pr.CreatedAt,
+		UpdatedAt:    pr.UpdatedAt,
+		Log:          pr.log.Operations(),
+	}
+	return json.Marshal(snap)
+}
+
+// UnmarshalJSON deserializes a PullRequest and rebuilds its operation log
+func (pr *PullRequest) UnmarshalJSON(data []byte) error {
+	var snap prSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return err
+	}
+	pr.ID = snap.ID
+	pr.Title = snap.Title
+	pr.Body = snap.Body
+	pr.Status = snap.Status
+	pr.Author = snap.Author
+	pr.SourceBranch = snap.SourceBranch
+	pr.TargetBranch = snap.TargetBranch
+	pr.Labels = snap.Labels
+	if pr.Labels == nil {
+		pr.Labels = make([]string, 0)
+	}
+	pr.Assignee = snap.Assignee
+	pr.Reviewers = snap.Reviewers
+	if pr.Reviewers == nil {
+		pr.Reviewers = make([]string, 0)
+	}
+	pr.CreatedAt = snap.CreatedAt
+	pr.UpdatedAt = snap.UpdatedAt
+	pr.log = NewOperationLog()
+	for _, op := range snap.Log {
+		pr.log.Add(op)
+	}
+	return nil
+}
 
 // PullRequest represents a CRDT pull request
 type PullRequest struct {
@@ -217,15 +287,35 @@ func (pr *PullRequest) Log() *OperationLog {
 
 // Merge merges another PR's operations into this one
 func (pr *PullRequest) Merge(other *PullRequest) {
-	// Collect all operations from both logs
-	allOps := append(pr.log.Operations(), other.log.Operations()...)
+	// Merge Lamport clocks
+	pr.log.clock.Merge(other.log.clock)
 
-	// For now, just append other's operations
-	for _, op := range other.log.Operations() {
-		pr.log.Add(op)
+	// Collect existing IDs to deduplicate
+	existingIDs := make(map[string]bool)
+	for _, op := range pr.log.Operations() {
+		existingIDs[op.ID] = true
 	}
 
-	// Apply operations to rebuild state
+	// Add only new operations from other
+	for _, op := range other.log.Operations() {
+		if !existingIDs[op.ID] {
+			pr.log.Add(op)
+		}
+	}
+
+	// Collect all operations and sort by Lamport counter, then timestamp
+	allOps := make([]*Operation, len(pr.log.Operations()))
+	copy(allOps, pr.log.Operations())
+	sort.Slice(allOps, func(a, b int) bool {
+		if allOps[a].Lamport != allOps[b].Lamport {
+			return allOps[a].Lamport < allOps[b].Lamport
+		}
+		return allOps[a].Timestamp.Before(allOps[b].Timestamp)
+	})
+
+	// Reset state and re-apply
+	pr.Labels = make([]string, 0)
+	pr.Reviewers = make([]string, 0)
 	pr.applyOperations(allOps)
 }
 

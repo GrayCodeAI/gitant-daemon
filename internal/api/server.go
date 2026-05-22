@@ -13,6 +13,7 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/lakshmanpatel/gitant/internal/storage"
+	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
 type Server struct {
@@ -23,9 +24,14 @@ type Server struct {
 	issues     *crdt.IssueStore
 	prs        *crdt.PullRequestStore
 	blockstore *storage.Blockstore
+	agents     *handlers.AgentRegistry
+	webhooks   *webhooks.Manager
+	labels     *crdt.LabelStore
+	tasks      *crdt.TaskStore
+	protection *storage.ProtectionStore
 }
 
-func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore) *Server {
+func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager) *Server {
 	s := &Server{
 		router:     chi.NewRouter(),
 		port:       port,
@@ -34,6 +40,11 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 		issues:     issues,
 		prs:        prs,
 		blockstore: blockstore,
+		agents:     handlers.NewAgentRegistry(),
+		webhooks:   webhookMgr,
+		labels:     labels,
+		tasks:      tasks,
+		protection: protection,
 	}
 
 	s.setupMiddleware()
@@ -64,31 +75,44 @@ func (s *Server) setupRoutes() {
 
 	// Repository endpoints
 	s.router.Route("/api/v1/repos", func(r chi.Router) {
-		r.Post("/", handlers.CreateRepo(s.repos))
+		r.Post("/", handlers.CreateRepo(s.repos, s.webhooks))
 		r.Get("/", handlers.ListRepos(s.repos))
 		r.Get("/{id}", handlers.GetRepo(s.repos))
-		r.Delete("/{id}", handlers.DeleteRepo(s.repos))
+		r.Delete("/{id}", handlers.DeleteRepo(s.repos, s.webhooks))
+		r.Post("/{id}/star", handlers.StarRepo(s.repos))
+		r.Post("/{id}/unstar", handlers.UnstarRepo(s.repos))
+		r.Get("/{id}/stars", handlers.GetStarCount(s.repos))
 
 		// Push endpoint
-		r.Post("/{id}/push", handlers.PushObjects(s.repos))
+		r.Post("/{id}/push", handlers.PushObjects(s.repos, s.protection))
 		r.Get("/{id}/clone", handlers.CloneRepo(s.repos))
 
 		// Refs
 		r.Get("/{id}/refs", handlers.ListRefs(s.repos))
 
+		// Objects
+		r.Get("/{id}/objects/{hash}", handlers.GetObject(s.repos))
+
+		// Git smart-HTTP
+		r.Get("/{id}/info/refs", handlers.InfoRefs(s.repos))
+		r.Post("/{id}/git-upload-pack", handlers.GitUploadPack(s.repos))
+		r.Post("/{id}/git-receive-pack", handlers.GitReceivePack(s.repos, s.protection))
+
 		// Issues
-		r.Post("/{id}/issues", handlers.CreateIssue(s.issues))
+		r.Post("/{id}/issues", handlers.CreateIssue(s.issues, s.webhooks))
 		r.Get("/{id}/issues", handlers.ListIssues(s.issues))
 		r.Get("/{id}/issues/{issueId}", handlers.GetIssue(s.issues))
-		r.Post("/{id}/issues/{issueId}/comment", handlers.CommentIssue(s.issues))
-		r.Post("/{id}/issues/{issueId}/close", handlers.CloseIssue(s.issues))
+		r.Post("/{id}/issues/{issueId}/comment", handlers.CommentIssue(s.issues, s.webhooks))
+		r.Post("/{id}/issues/{issueId}/close", handlers.CloseIssue(s.issues, s.webhooks))
+		r.Get("/{id}/issues/{issueId}/comments", handlers.ListIssueComments(s.issues))
 
 		// Pull Requests
-		r.Post("/{id}/prs", handlers.OpenPR(s.prs))
+		r.Post("/{id}/prs", handlers.OpenPR(s.prs, s.webhooks))
 		r.Get("/{id}/prs", handlers.ListPRs(s.prs))
 		r.Get("/{id}/prs/{prId}", handlers.GetPR(s.prs))
-		r.Post("/{id}/prs/{prId}/review", handlers.ReviewPR(s.prs))
-		r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs))
+		r.Post("/{id}/prs/{prId}/review", handlers.ReviewPR(s.prs, s.webhooks))
+		r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs, s.webhooks))
+		r.Get("/{id}/prs/{prId}/comments", handlers.ListPRComments(s.prs))
 
 		// Branches
 		r.Post("/{id}/branches", handlers.CreateBranch(s.repos))
@@ -101,15 +125,43 @@ func (s *Server) setupRoutes() {
 		// Commits
 		r.Get("/{id}/commits", handlers.GetCommitLog(s.repos))
 		r.Get("/{id}/diff", handlers.DiffCommits(s.repos))
+
+		// Labels
+		r.Get("/{id}/labels", handlers.ListLabels(s.labels))
+		r.Post("/{id}/labels", handlers.CreateLabel(s.labels))
+		r.Delete("/{id}/labels/{name}", handlers.DeleteLabel(s.labels))
+
+		// Branch protection
+		r.Get("/{id}/protections", handlers.ListProtections(s.protection))
+		r.Get("/{id}/protections/{branch}", handlers.GetProtection(s.protection))
+		r.Put("/{id}/protections/{branch}", handlers.SetProtection(s.protection))
+		r.Delete("/{id}/protections/{branch}", handlers.RemoveProtection(s.protection))
+
+		// Tasks
+		r.Get("/{id}/tasks", handlers.ListTasks(s.tasks))
+		r.Post("/{id}/tasks", handlers.CreateTask(s.tasks))
+		r.Post("/{id}/tasks/{taskId}/claim", handlers.ClaimTask(s.tasks))
+		r.Post("/{id}/tasks/{taskId}/complete", handlers.CompleteTask(s.tasks))
 	})
+
+	// Activity feed
+	s.router.Get("/api/v1/activity", handlers.GetActivity(s.issues, s.prs, s.tasks))
 
 	// Agent endpoints
 	s.router.Route("/api/v1/agents", func(r chi.Router) {
-		r.Get("/", handlers.ListAgents())
-		r.Get("/{did}", handlers.GetAgent())
-		r.Post("/{did}/delegate", handlers.DelegateCapability(s.identity))
+		r.Get("/", handlers.ListAgents(s.agents))
 		r.Post("/generate-did", handlers.GenerateDID())
+		r.Post("/verify", handlers.VerifyUCAN())
 		r.Get("/resolve/{did}", handlers.ResolveDID())
+		r.Get("/{did}", handlers.GetAgent(s.agents))
+		r.Post("/{did}/delegate", handlers.DelegateCapability(s.identity))
+	})
+
+	// Webhook endpoints
+	s.router.Route("/api/v1/webhooks", func(r chi.Router) {
+		r.Get("/", handlers.ListWebhooks(s.webhooks))
+		r.Post("/", handlers.RegisterWebhook(s.webhooks))
+		r.Delete("/{id}", handlers.DeleteWebhook(s.webhooks))
 	})
 }
 

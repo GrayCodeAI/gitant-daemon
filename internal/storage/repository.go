@@ -314,6 +314,48 @@ func (r *Repository) ListTreeEntries(treeHash plumbing.Hash, path string) ([]Tre
 	return entries, nil
 }
 
+// StoreObject stores a raw git object by hash
+func (r *Repository) StoreObject(hash plumbing.Hash, objType plumbing.ObjectType, content []byte) error {
+	obj := r.repo.Storer
+	enc := obj.NewEncodedObject()
+	enc.SetType(objType)
+	enc.SetSize(int64(len(content)))
+
+	writer, err := enc.Writer()
+	if err != nil {
+		return fmt.Errorf("getting writer: %w", err)
+	}
+	if _, err := writer.Write(content); err != nil {
+		return fmt.Errorf("writing content: %w", err)
+	}
+
+	if _, err := obj.SetEncodedObject(enc); err != nil {
+		return fmt.Errorf("storing object: %w", err)
+	}
+	return nil
+}
+
+// GetObject retrieves a raw git object by hash
+func (r *Repository) GetObject(hash plumbing.Hash) (plumbing.ObjectType, []byte, error) {
+	obj, err := r.repo.Storer.EncodedObject(plumbing.AnyObject, hash)
+	if err != nil {
+		return 0, nil, fmt.Errorf("getting object: %w", err)
+	}
+
+	reader, err := obj.Reader()
+	if err != nil {
+		return 0, nil, fmt.Errorf("getting reader: %w", err)
+	}
+	defer reader.Close()
+
+	buf := make([]byte, obj.Size())
+	if _, err := reader.Read(buf); err != nil {
+		return 0, nil, fmt.Errorf("reading content: %w", err)
+	}
+
+	return obj.Type(), buf, nil
+}
+
 // ListAllRefs returns all references with their names and hashes
 type RefInfo struct {
 	Name string `json:"name"`

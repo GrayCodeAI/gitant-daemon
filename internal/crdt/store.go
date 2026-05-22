@@ -3,19 +3,44 @@ package crdt
 import (
 	"fmt"
 	"sync"
+
+	"github.com/lakshmanpatel/gitant/internal/persistence"
 )
 
 // IssueStore manages issues across repositories
 type IssueStore struct {
 	mu     sync.RWMutex
 	issues map[string]map[string]*Issue // repoID -> issueID -> Issue
+	path   string                       // persistence file path
 }
 
 // NewIssueStore creates a new issue store
-func NewIssueStore() *IssueStore {
+func NewIssueStore(path string) *IssueStore {
 	return &IssueStore{
 		issues: make(map[string]map[string]*Issue),
+		path:   path,
 	}
+}
+
+// Load reads persisted issues from disk
+func (s *IssueStore) Load() error {
+	if s.path == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return persistence.LoadJSON(s.path, &s.issues)
+}
+
+// Save writes all issues to disk
+func (s *IssueStore) Save() error {
+	if s.path == "" {
+		return nil
+	}
+	s.mu.RLock()
+	data := s.issues
+	s.mu.RUnlock()
+	return persistence.SaveJSON(s.path, data)
 }
 
 // Create creates a new issue in a repository
@@ -82,5 +107,17 @@ func (s *IssueStore) Delete(repoID, issueID string) error {
 	}
 
 	delete(repo, issueID)
-	return nil
+	return s.Save()
+}
+
+// SaveIssue persists after a mutation (convenience for handlers)
+func (s *IssueStore) SaveIssue(repoID, issueID string) error {
+	return s.Save()
+}
+
+// All returns all issues across all repositories
+func (s *IssueStore) All() map[string]map[string]*Issue {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.issues
 }

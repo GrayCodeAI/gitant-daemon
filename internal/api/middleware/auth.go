@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/lakshmanpatel/gitant/internal/identity"
 )
 
 type contextKey string
@@ -16,7 +18,7 @@ const (
 	SignatureKey contextKey = "signature"
 )
 
-// HTTPSignatureMiddleware verifies RFC 9421 HTTP signatures
+// HTTPSignatureMiddleware verifies RFC 9421 HTTP signatures or UCAN Bearer tokens
 func HTTPSignatureMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
@@ -25,12 +27,40 @@ func HTTPSignatureMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Handle UCAN Bearer tokens
+		if strings.HasPrefix(auth, "Bearer ") {
+			token := strings.TrimPrefix(auth, "Bearer ")
+			ucan, err := identity.DecodeUCAN(token)
+			if err != nil {
+				http.Error(w, "Invalid UCAN token", http.StatusUnauthorized)
+				return
+			}
+
+			// Try to verify signature if issuer is did:key
+			if pubKey, err := identity.ExtractPublicKeyFromDID(ucan.Issuer); err == nil {
+				if _, err := identity.VerifySignedUCANByKey(token, pubKey); err != nil {
+					http.Error(w, "Invalid UCAN signature", http.StatusUnauthorized)
+					return
+				}
+			}
+
+			// Validate time bounds
+			if err := ucan.Validate(); err != nil {
+				http.Error(w, "UCAN expired or not yet valid", http.StatusUnauthorized)
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), IdentityKey, ucan.Issuer)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
+		// Handle HTTP Signatures
 		if !strings.HasPrefix(auth, "Signature") {
 			http.Error(w, "Invalid authorization header", http.StatusUnauthorized)
 			return
 		}
 
-		// Parse signature params
 		params, err := parseSignatureParams(auth)
 		if err != nil {
 			http.Error(w, "Invalid signature params: "+err.Error(), http.StatusBadRequest)
@@ -49,34 +79,29 @@ func HTTPSignatureMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Decode signature
 		sigBytes, err := base64.StdEncoding.DecodeString(signature)
 		if err != nil {
 			http.Error(w, "Invalid signature encoding", http.StatusBadRequest)
 			return
 		}
 
-		// Build signing string
 		signingString, err := buildSigningString(r, params)
 		if err != nil {
 			http.Error(w, "Failed to build signing string: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		// Extract public key from DID
 		pubKey, err := extractPublicKey(keyId)
 		if err != nil {
 			http.Error(w, "Failed to extract public key: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		// Verify signature
 		if !ed25519.Verify(pubKey, []byte(signingString), sigBytes) {
 			http.Error(w, "Invalid signature", http.StatusUnauthorized)
 			return
 		}
 
-		// Add identity to context
 		ctx := context.WithValue(r.Context(), IdentityKey, keyId)
 		ctx = context.WithValue(ctx, SignatureKey, params)
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -129,6 +154,26 @@ func buildSigningString(r *http.Request, params map[string]string) (string, erro
 	}
 
 	return strings.Join(parts, "\n"), nil
+}
+
+// RequireIdentity is middleware that rejects requests without a valid identity
+func RequireIdentity(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		did, ok := r.Context().Value(IdentityKey).(string)
+		if !ok || did == "" {
+			http.Error(w, "Authentication required", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// GetIdentity extracts the DID from the request context, or empty string
+func GetIdentity(r *http.Request) string {
+	if did, ok := r.Context().Value(IdentityKey).(string); ok {
+		return did
+	}
+	return ""
 }
 
 // extractPublicKey extracts the public key from a DID:key

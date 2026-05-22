@@ -7,7 +7,7 @@ import (
 )
 
 func TestBlockstore(t *testing.T) {
-	bs := NewBlockstore()
+	bs := NewBlockstore("")
 
 	// Test Put and Get
 	hash := plumbing.NewHash("abc123def456abc123def456abc123def456abc1")
@@ -50,7 +50,7 @@ func TestBlockstore(t *testing.T) {
 }
 
 func TestBlockstoreList(t *testing.T) {
-	bs := NewBlockstore()
+	bs := NewBlockstore("")
 
 	// Add multiple blocks
 	hashes := []plumbing.Hash{
@@ -80,7 +80,7 @@ func TestBlockstoreList(t *testing.T) {
 }
 
 func TestBlockstoreBulk(t *testing.T) {
-	bs := NewBlockstore()
+	bs := NewBlockstore("")
 
 	// Test PutAll
 	blocks := map[plumbing.Hash][]byte{

@@ -1,0 +1,13 @@
+services:
+  daemon:
+    build: .
+    ports:
+      - "7777:7777"
+    volumes:
+      - gitant-data:/root/.gitant
+    environment:
+      - GITANT_PORT=7777
+    restart: unless-stopped
+
+volumes:
+  gitant-data:

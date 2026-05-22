@@ -1,7 +1,7 @@
 package core
 
 import (
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 
@@ -37,6 +37,6 @@ func CIDToGit(cid *CID) (plumbing.Hash, error) {
 func ComputeGitHash(content []byte) plumbing.Hash {
 	header := fmt.Sprintf("blob %d\x00", len(content))
 	data := append([]byte(header), content...)
-	hash := sha256.Sum256(data)
+	hash := sha1.Sum(data)
 	return plumbing.NewHash(hex.EncodeToString(hash[:]))
 }

@@ -131,3 +131,27 @@ func (i *Identity) DIDDocument() map[string]interface{} {
 func (i *Identity) String() string {
 	return i.DID
 }
+
+// ExtractPublicKeyFromDID extracts the Ed25519 public key from a did:key string
+func ExtractPublicKeyFromDID(did string) (ed25519.PublicKey, error) {
+	if len(did) < 10 || did[:8] != "did:key:" {
+		return nil, fmt.Errorf("invalid DID format: %s", did)
+	}
+
+	encoded := did[8:] // remove "did:key:"
+	if len(encoded) < 2 || encoded[0] != 'z' {
+		return nil, fmt.Errorf("invalid did:key encoding")
+	}
+	encoded = encoded[1:] // remove 'z' prefix
+
+	pubKey, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decoding public key: %w", err)
+	}
+
+	if len(pubKey) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid public key size: %d", len(pubKey))
+	}
+
+	return ed25519.PublicKey(pubKey), nil
+}

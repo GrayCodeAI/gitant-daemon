@@ -35,6 +35,7 @@ type Operation struct {
 	Type      OperationType          `json:"type"`
 	Author    string                 `json:"author"` // DID
 	Timestamp time.Time              `json:"timestamp"`
+	Lamport   uint64                 `json:"lamport"`
 	Data      map[string]interface{} `json:"data"`
 	Parent    string                 `json:"parent,omitempty"` // Parent operation ID
 }
@@ -60,10 +61,10 @@ func (c *LamportClock) Value() uint64 {
 	return c.counter
 }
 
-// Merge merges with another clock value
-func (c *LamportClock) Merge(other uint64) {
-	if other > c.counter {
-		c.counter = other
+// Merge merges with another clock, taking the max
+func (c *LamportClock) Merge(other *LamportClock) {
+	if other.counter > c.counter {
+		c.counter = other.counter
 	}
 }
 
@@ -83,8 +84,10 @@ func NewOperationLog() *OperationLog {
 
 // Add adds an operation to the log
 func (l *OperationLog) Add(op *Operation) {
-	op.Timestamp = time.Now()
-	l.clock.Increment()
+	if op.Timestamp.IsZero() {
+		op.Timestamp = time.Now()
+	}
+	op.Lamport = l.clock.Increment()
 	l.operations = append(l.operations, op)
 }
 

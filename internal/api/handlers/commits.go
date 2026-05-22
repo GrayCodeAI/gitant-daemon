@@ -46,9 +46,9 @@ func GetCommitLog(registry *storage.RepositoryRegistry) http.HandlerFunc {
 				http.Error(w, "No refs found", http.StatusNotFound)
 				return
 			}
-			for _, r := range refs {
-				if strings.HasSuffix(r.Name, "/HEAD") || strings.HasSuffix(r.Name, "/main") || strings.HasSuffix(r.Name, "/master") {
-					startHash = plumbing.NewHash(r.Hash)
+			for _, ref := range refs {
+				if strings.HasSuffix(ref.Name, "/HEAD") || strings.HasSuffix(ref.Name, "/main") || strings.HasSuffix(ref.Name, "/master") {
+					startHash = plumbing.NewHash(ref.Hash)
 					break
 				}
 			}
@@ -102,8 +102,16 @@ func DiffCommits(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		}
 
 		// Simple diff: list changed files by comparing tree entries
-		fromEntries, _ := repo.ListTreeEntries(from.TreeHash, "")
-		toEntries, _ := repo.ListTreeEntries(to.TreeHash, "")
+		fromEntries, err := repo.ListTreeEntries(from.TreeHash, "")
+		if err != nil {
+			http.Error(w, "Failed to list from tree: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		toEntries, err := repo.ListTreeEntries(to.TreeHash, "")
+		if err != nil {
+			http.Error(w, "Failed to list to tree: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 
 		fromMap := make(map[string]string)
 		for _, e := range fromEntries {

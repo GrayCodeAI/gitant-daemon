@@ -8,10 +8,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
+	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
 // CreateIssue creates a new issue
-func CreateIssue(store *crdt.IssueStore) http.HandlerFunc {
+func CreateIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 
@@ -43,6 +44,17 @@ func CreateIssue(store *crdt.IssueStore) http.HandlerFunc {
 		for _, label := range req.Labels {
 			issue.AddLabel(author, label)
 		}
+		_ = store.Save()
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventIssueCreated,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"issue_id": issueID,
+				"title":    req.Title,
+				"author":   author,
+			},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -117,7 +129,7 @@ func GetIssue(store *crdt.IssueStore) http.HandlerFunc {
 }
 
 // CommentIssue adds a comment to an issue
-func CommentIssue(store *crdt.IssueStore) http.HandlerFunc {
+func CommentIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		issueID := chi.URLParam(r, "issueId")
@@ -143,6 +155,17 @@ func CommentIssue(store *crdt.IssueStore) http.HandlerFunc {
 		}
 
 		issue.AddComment(author, req.Body)
+		_ = store.Save()
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventIssueCommented,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"issue_id": issueID,
+				"author":   author,
+				"body":     req.Body,
+			},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -155,7 +178,7 @@ func CommentIssue(store *crdt.IssueStore) http.HandlerFunc {
 }
 
 // CloseIssue closes an issue
-func CloseIssue(store *crdt.IssueStore) http.HandlerFunc {
+func CloseIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		issueID := chi.URLParam(r, "issueId")
@@ -172,12 +195,54 @@ func CloseIssue(store *crdt.IssueStore) http.HandlerFunc {
 		}
 
 		issue.SetStatus(author, crdt.StatusClosed)
+		_ = store.Save()
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventIssueClosed,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"issue_id": issueID,
+				"author":   author,
+			},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"id":      issueID,
 			"status":  string(crdt.StatusClosed),
+		})
+	}
+}
+
+// ListIssueComments lists all comments on an issue
+func ListIssueComments(store *crdt.IssueStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoID := chi.URLParam(r, "id")
+		issueID := chi.URLParam(r, "issueId")
+
+		issue, err := store.Get(repoID, issueID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		comments := make([]map[string]interface{}, 0)
+		for _, op := range issue.Log().Operations() {
+			if op.Type == crdt.OpAddComment {
+				comments = append(comments, map[string]interface{}{
+					"id":        op.ID,
+					"author":    op.Author,
+					"body":      op.Data["comment"],
+					"timestamp": op.Timestamp.Format(time.RFC3339),
+				})
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"comments": comments,
+			"total":    len(comments),
 		})
 	}
 }

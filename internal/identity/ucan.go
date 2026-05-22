@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -39,16 +40,82 @@ func NewUCAN(issuer, audience string, caps []Capability, duration time.Duration)
 	}
 }
 
-// Encode encodes the UCAN to a string
+// Encode encodes the UCAN to a signed string
 func (u *UCAN) Encode() (string, error) {
 	data, err := json.Marshal(u)
 	if err != nil {
 		return "", fmt.Errorf("marshaling UCAN: %w", err)
 	}
 
-	// TODO: Sign the UCAN with the issuer's key
-	// For now, return base64 encoded JSON
 	return base64Encode(data), nil
+}
+
+// Sign signs the UCAN with the given identity and returns a signed token
+func (u *UCAN) Sign(id *Identity) (string, error) {
+	data, err := json.Marshal(u)
+	if err != nil {
+		return "", fmt.Errorf("marshaling UCAN: %w", err)
+	}
+
+	sig := id.Sign(data)
+
+	// Format: <base64-payload>.<base64-signature>
+	return base64Encode(data) + "." + base64Encode(sig), nil
+}
+
+// VerifySignedUCAN verifies a signed UCAN token with a known issuer identity
+func VerifySignedUCAN(token string, expectedIssuer *Identity) (*UCAN, error) {
+	ucan, payload, sig, err := splitUCAN(token)
+	if err != nil {
+		return nil, err
+	}
+	if !expectedIssuer.Verify(payload, sig) {
+		return nil, fmt.Errorf("invalid signature")
+	}
+	return ucan, nil
+}
+
+// VerifySignedUCANByKey verifies a signed UCAN using a raw public key (for did:key resolution)
+func VerifySignedUCANByKey(token string, pubKey ed25519.PublicKey) (*UCAN, error) {
+	ucan, payload, sig, err := splitUCAN(token)
+	if err != nil {
+		return nil, err
+	}
+	if !ed25519.Verify(pubKey, payload, sig) {
+		return nil, fmt.Errorf("invalid signature")
+	}
+	return ucan, nil
+}
+
+// splitUCAN splits a signed UCAN token into its components
+func splitUCAN(token string) (*UCAN, []byte, []byte, error) {
+	dotIdx := -1
+	for i, c := range token {
+		if c == '.' {
+			dotIdx = i
+			break
+		}
+	}
+	if dotIdx == -1 {
+		return nil, nil, nil, fmt.Errorf("invalid token format")
+	}
+
+	payload, err := base64Decode(token[:dotIdx])
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decoding payload: %w", err)
+	}
+
+	sig, err := base64Decode(token[dotIdx+1:])
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decoding signature: %w", err)
+	}
+
+	var ucan UCAN
+	if err := json.Unmarshal(payload, &ucan); err != nil {
+		return nil, nil, nil, fmt.Errorf("unmarshaling UCAN: %w", err)
+	}
+
+	return &ucan, payload, sig, nil
 }
 
 // DecodeUCAN decodes a UCAN from a string

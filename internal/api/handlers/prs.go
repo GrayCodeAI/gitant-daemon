@@ -8,10 +8,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
+	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
 // OpenPR opens a new pull request
-func OpenPR(store *crdt.PullRequestStore) http.HandlerFunc {
+func OpenPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 
@@ -39,6 +40,19 @@ func OpenPR(store *crdt.PullRequestStore) http.HandlerFunc {
 
 		prID := fmt.Sprintf("pr-%d", time.Now().UnixNano())
 		pr := store.Create(repoID, prID, author, req.Title, req.Body, req.SourceBranch, req.TargetBranch)
+		_ = store.Save()
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventPROpened,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"pr_id":         prID,
+				"title":         req.Title,
+				"author":        author,
+				"source_branch": req.SourceBranch,
+				"target_branch": req.TargetBranch,
+			},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -118,7 +132,7 @@ func GetPR(store *crdt.PullRequestStore) http.HandlerFunc {
 }
 
 // ReviewPR adds a review to a pull request
-func ReviewPR(store *crdt.PullRequestStore) http.HandlerFunc {
+func ReviewPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		prID := chi.URLParam(r, "prId")
@@ -148,11 +162,23 @@ func ReviewPR(store *crdt.PullRequestStore) http.HandlerFunc {
 		pr.AddReviewer(author, author)
 		comment := fmt.Sprintf("Review [%s]: %s", req.Verdict, req.Body)
 		pr.AddComment(author, comment)
+		_ = store.Save()
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventPRReviewed,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"pr_id":   prID,
+				"author":  author,
+				"verdict": req.Verdict,
+				"body":    req.Body,
+			},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"pr":      prID,
+			"success":  true,
+			"pr":       prID,
 			"reviewer": author,
 			"verdict":  req.Verdict,
 		})
@@ -160,7 +186,7 @@ func ReviewPR(store *crdt.PullRequestStore) http.HandlerFunc {
 }
 
 // MergePR merges a pull request
-func MergePR(store *crdt.PullRequestStore) http.HandlerFunc {
+func MergePR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		prID := chi.URLParam(r, "prId")
@@ -177,12 +203,54 @@ func MergePR(store *crdt.PullRequestStore) http.HandlerFunc {
 		}
 
 		pr.SetStatus(author, crdt.StatusMerged)
+		_ = store.Save()
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventPRMerged,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"pr_id":  prID,
+				"author": author,
+			},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"id":      prID,
 			"status":  string(crdt.StatusMerged),
+		})
+	}
+}
+
+// ListPRComments lists all comments on a pull request
+func ListPRComments(store *crdt.PullRequestStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoID := chi.URLParam(r, "id")
+		prID := chi.URLParam(r, "prId")
+
+		pr, err := store.Get(repoID, prID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		comments := make([]map[string]interface{}, 0)
+		for _, op := range pr.Log().Operations() {
+			if op.Type == crdt.OpAddComment {
+				comments = append(comments, map[string]interface{}{
+					"id":        op.ID,
+					"author":    op.Author,
+					"body":      op.Data["comment"],
+					"timestamp": op.Timestamp.Format(time.RFC3339),
+				})
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"comments": comments,
+			"total":    len(comments),
 		})
 	}
 }

@@ -1,9 +1,68 @@
 package crdt
 
 import (
+	"encoding/json"
 	"fmt"
+	"math/rand"
+	"sort"
 	"time"
 )
+
+// issueSnapshot is the JSON-serializable representation of an Issue
+type issueSnapshot struct {
+	ID        string       `json:"id"`
+	Title     string       `json:"title"`
+	Body      string       `json:"body"`
+	Status    Status       `json:"status"`
+	Author    string       `json:"author"`
+	Labels    []string     `json:"labels"`
+	Assignee  string       `json:"assignee"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
+	Log       []*Operation `json:"log"`
+}
+
+// MarshalJSON serializes an Issue including its operation log
+func (i *Issue) MarshalJSON() ([]byte, error) {
+	snap := issueSnapshot{
+		ID:        i.ID,
+		Title:     i.Title,
+		Body:      i.Body,
+		Status:    i.Status,
+		Author:    i.Author,
+		Labels:    i.Labels,
+		Assignee:  i.Assignee,
+		CreatedAt: i.CreatedAt,
+		UpdatedAt: i.UpdatedAt,
+		Log:       i.log.Operations(),
+	}
+	return json.Marshal(snap)
+}
+
+// UnmarshalJSON deserializes an Issue and rebuilds its operation log
+func (i *Issue) UnmarshalJSON(data []byte) error {
+	var snap issueSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return err
+	}
+	i.ID = snap.ID
+	i.Title = snap.Title
+	i.Body = snap.Body
+	i.Status = snap.Status
+	i.Author = snap.Author
+	i.Labels = snap.Labels
+	if i.Labels == nil {
+		i.Labels = make([]string, 0)
+	}
+	i.Assignee = snap.Assignee
+	i.CreatedAt = snap.CreatedAt
+	i.UpdatedAt = snap.UpdatedAt
+	i.log = NewOperationLog()
+	for _, op := range snap.Log {
+		i.log.Add(op)
+	}
+	return nil
+}
 
 // Issue represents a CRDT issue
 type Issue struct {
@@ -171,16 +230,34 @@ func (i *Issue) Log() *OperationLog {
 
 // Merge merges another issue's operations into this one
 func (i *Issue) Merge(other *Issue) {
-	// Collect all operations from both logs
-	allOps := append(i.log.Operations(), other.log.Operations()...)
+	// Merge Lamport clocks
+	i.log.clock.Merge(other.log.clock)
 
-	// Sort by timestamp (simple merge - in production, use Lamport timestamps)
-	// For now, just append other's operations
-	for _, op := range other.log.Operations() {
-		i.log.Add(op)
+	// Collect existing IDs to deduplicate
+	existingIDs := make(map[string]bool)
+	for _, op := range i.log.Operations() {
+		existingIDs[op.ID] = true
 	}
 
-	// Apply operations to rebuild state
+	// Add only new operations from other
+	for _, op := range other.log.Operations() {
+		if !existingIDs[op.ID] {
+			i.log.Add(op)
+		}
+	}
+
+	// Collect all operations and sort by Lamport counter, then timestamp
+	allOps := make([]*Operation, len(i.log.Operations()))
+	copy(allOps, i.log.Operations())
+	sort.Slice(allOps, func(a, b int) bool {
+		if allOps[a].Lamport != allOps[b].Lamport {
+			return allOps[a].Lamport < allOps[b].Lamport
+		}
+		return allOps[a].Timestamp.Before(allOps[b].Timestamp)
+	})
+
+	// Reset state and re-apply
+	i.Labels = make([]string, 0)
 	i.applyOperations(allOps)
 }
 
@@ -231,5 +308,5 @@ func (i *Issue) applyOperations(ops []*Operation) {
 }
 
 func generateID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Int63())
 }

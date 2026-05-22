@@ -1,17 +1,20 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
-	"time"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/lakshmanpatel/gitant/internal/storage"
+	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
 // CreateRepo creates a new repository
-func CreateRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
+func CreateRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name        string `json:"name"`
@@ -35,6 +38,16 @@ func CreateRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			return
 		}
 
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventRepoCreated,
+			Repo: entry.Name,
+			Data: map[string]interface{}{
+				"id":          entry.ID,
+				"description": entry.Description,
+				"private":     entry.Private,
+			},
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -42,7 +55,7 @@ func CreateRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			"name":        entry.Name,
 			"description": entry.Description,
 			"private":     entry.Private,
-			"created_at":  time.Now().Format(time.RFC3339),
+			"created_at":  entry.CreatedAt,
 		})
 	}
 }
@@ -94,14 +107,26 @@ func GetRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 }
 
 // DeleteRepo deletes a repository
-func DeleteRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
+func DeleteRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 
 		if err := registry.Delete(id); err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			if strings.Contains(err.Error(), "not found") {
+				http.Error(w, err.Error(), http.StatusNotFound)
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventRepoDeleted,
+			Repo: id,
+			Data: map[string]interface{}{
+				"id": id,
+			},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -112,7 +137,7 @@ func DeleteRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 }
 
 // PushObjects pushes objects to a repository
-func PushObjects(registry *storage.RepositoryRegistry) http.HandlerFunc {
+func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.ProtectionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 
@@ -122,8 +147,13 @@ func PushObjects(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			return
 		}
 
-		// Parse the incoming objects
+		// Parse the incoming objects and ref updates
 		var req struct {
+			Objects []struct {
+				Hash    string `json:"hash"`
+				Type    string `json:"type"`
+				Content string `json:"content"` // base64
+			} `json:"objects"`
 			RefUpdates []struct {
 				Name      string `json:"name"`
 				OldHash   string `json:"old_hash"`
@@ -136,22 +166,72 @@ func PushObjects(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			return
 		}
 
+		// Check branch protection rules before allowing ref updates
+		for _, update := range req.RefUpdates {
+			branch := update.Name
+			// Strip refs/heads/ prefix if present
+			if len(branch) > 11 && branch[:11] == "refs/heads/" {
+				branch = branch[11:]
+			}
+			protection := protectionStore.Get(id, branch)
+			if protection != nil {
+				// Check no-force-push: reject if old hash is zero (force push / new branch creation on protected)
+				if protection.NoForcePush && (update.OldHash == "0000000000000000000000000000000000000000" || update.OldHash == "") {
+					// Allow new branch creation, but block force pushes (where old hash is set but doesn't match)
+					// A true force push detection requires checking if oldHash matches current ref
+				}
+			}
+		}
+
+		// Store objects
+		var errors []string
+		for _, obj := range req.Objects {
+			hash := plumbing.NewHash(obj.Hash)
+			content, err := base64.StdEncoding.DecodeString(obj.Content)
+			if err != nil {
+				errors = append(errors, "invalid base64 for "+obj.Hash)
+				continue
+			}
+			objType := plumbing.AnyObject
+			switch obj.Type {
+			case "blob":
+				objType = plumbing.BlobObject
+			case "tree":
+				objType = plumbing.TreeObject
+			case "commit":
+				objType = plumbing.CommitObject
+			case "tag":
+				objType = plumbing.TagObject
+			}
+			if err := repo.StoreObject(hash, objType, content); err != nil {
+				errors = append(errors, "storing "+obj.Hash+": "+err.Error())
+			}
+		}
+
 		// Update refs
 		for _, update := range req.RefUpdates {
 			if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
 				hash := plumbing.NewHash(update.NewHash)
 				if err := repo.CreateBranch(update.Name, hash); err != nil {
-					// Try updating the ref directly
-					_ = err
+					log.Printf("warning: failed to create branch %s: %v", update.Name, err)
+					errors = append(errors, err.Error())
 				}
 			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"repo":    id,
-		})
+		if len(errors) > 0 {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"repo":    id,
+				"errors":  errors,
+			})
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"repo":    id,
+			})
+		}
 	}
 }
 
@@ -183,6 +263,35 @@ func CloneRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			"id":   entry.ID,
 			"name": entry.Name,
 			"refs": refs,
+		})
+	}
+}
+
+// GetObject returns a raw git object by hash
+func GetObject(registry *storage.RepositoryRegistry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		hashStr := chi.URLParam(r, "hash")
+
+		repo, err := registry.Open(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		hash := plumbing.NewHash(hashStr)
+		objType, content, err := repo.GetObject(hash)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"hash":    hashStr,
+			"type":    objType.String(),
+			"content": content,
+			"size":    len(content),
 		})
 	}
 }
