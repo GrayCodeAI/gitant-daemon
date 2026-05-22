@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -14,16 +13,9 @@ import (
 // GetCommitLog returns the commit history
 func GetCommitLog(registry *storage.RepositoryRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		repoID := chi.URLParam(r, "id")
 		ref := r.URL.Query().Get("ref")
-		limitStr := r.URL.Query().Get("limit")
-
-		limit := 20
-		if limitStr != "" {
-			if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-				limit = l
-			}
-		}
 
 		repo, err := registry.Open(repoID)
 		if err != nil {
@@ -57,16 +49,21 @@ func GetCommitLog(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			}
 		}
 
-		commits, err := repo.WalkCommits(startHash, limit)
+		// Walk enough commits for the requested page
+		commits, err := repo.WalkCommits(startHash, offset+limit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
+		paged, total := PaginateSlice(commits, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"commits": commits,
-			"total":   len(commits),
+			"commits": paged,
+			"total":   total,
+			"offset":  offset,
+			"limit":   limit,
 		})
 	}
 }
@@ -101,45 +98,7 @@ func DiffCommits(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			return
 		}
 
-		// Simple diff: list changed files by comparing tree entries
-		fromEntries, err := repo.ListTreeEntries(from.TreeHash, "")
-		if err != nil {
-			http.Error(w, "Failed to list from tree: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		toEntries, err := repo.ListTreeEntries(to.TreeHash, "")
-		if err != nil {
-			http.Error(w, "Failed to list to tree: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		fromMap := make(map[string]string)
-		for _, e := range fromEntries {
-			fromMap[e.Name] = e.Hash.String()
-		}
-
-		toMap := make(map[string]string)
-		for _, e := range toEntries {
-			toMap[e.Name] = e.Hash.String()
-		}
-
-		changes := make([]map[string]string, 0)
-
-		// Added or modified
-		for name, hash := range toMap {
-			if oldHash, exists := fromMap[name]; !exists {
-				changes = append(changes, map[string]string{"file": name, "type": "added", "hash": hash})
-			} else if oldHash != hash {
-				changes = append(changes, map[string]string{"file": name, "type": "modified", "old_hash": oldHash, "new_hash": hash})
-			}
-		}
-
-		// Deleted
-		for name, hash := range fromMap {
-			if _, exists := toMap[name]; !exists {
-				changes = append(changes, map[string]string{"file": name, "type": "deleted", "hash": hash})
-			}
-		}
+		changes := diffTrees(repo, from.TreeHash, to.TreeHash)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -149,4 +108,91 @@ func DiffCommits(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			"total":   len(changes),
 		})
 	}
+}
+
+// DiffCommitAllParents shows diffs against all parent commits (for merge commits)
+func DiffCommitAllParents(registry *storage.RepositoryRegistry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoID := chi.URLParam(r, "id")
+		commitHash := chi.URLParam(r, "hash")
+
+		repo, err := registry.Open(repoID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		commit, err := repo.GetCommit(plumbing.NewHash(commitHash))
+		if err != nil {
+			http.Error(w, "Commit not found", http.StatusNotFound)
+			return
+		}
+
+		if len(commit.ParentHashes) == 0 {
+			// Root commit: diff against empty tree
+			changes := diffTrees(repo, plumbing.ZeroHash, commit.TreeHash)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"commit":   commitHash,
+				"parents":  []map[string]interface{}{{"hash": "root", "changes": changes, "total": len(changes)}},
+			})
+			return
+		}
+
+		parentDiffs := make([]map[string]interface{}, 0, len(commit.ParentHashes))
+		for _, parentHash := range commit.ParentHashes {
+			parent, err := repo.GetCommit(parentHash)
+			if err != nil {
+				continue
+			}
+			changes := diffTrees(repo, parent.TreeHash, commit.TreeHash)
+			parentDiffs = append(parentDiffs, map[string]interface{}{
+				"hash":    parentHash.String(),
+				"changes": changes,
+				"total":   len(changes),
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"commit":  commitHash,
+			"parents": parentDiffs,
+		})
+	}
+}
+
+// diffTrees compares two tree hashes and returns changes
+func diffTrees(repo *storage.Repository, fromTree, toTree plumbing.Hash) []map[string]string {
+	fromEntries, err := repo.ListTreeEntries(fromTree, "")
+	if err != nil {
+		return nil
+	}
+	toEntries, err := repo.ListTreeEntries(toTree, "")
+	if err != nil {
+		return nil
+	}
+
+	fromMap := make(map[string]string)
+	for _, e := range fromEntries {
+		fromMap[e.Name] = e.Hash.String()
+	}
+	toMap := make(map[string]string)
+	for _, e := range toEntries {
+		toMap[e.Name] = e.Hash.String()
+	}
+
+	changes := make([]map[string]string, 0)
+	for name, hash := range toMap {
+		if oldHash, exists := fromMap[name]; !exists {
+			changes = append(changes, map[string]string{"file": name, "type": "added", "hash": hash})
+		} else if oldHash != hash {
+			changes = append(changes, map[string]string{"file": name, "type": "modified", "old_hash": oldHash, "new_hash": hash})
+		}
+	}
+	for name, hash := range fromMap {
+		if _, exists := toMap[name]; !exists {
+			changes = append(changes, map[string]string{"file": name, "type": "deleted", "hash": hash})
+		}
+	}
+	return changes
 }

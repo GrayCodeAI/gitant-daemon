@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/lakshmanpatel/gitant/internal/crdt"
@@ -23,10 +22,7 @@ type ActivityEvent struct {
 // GetActivity returns a unified activity feed across all repos
 func GetActivity(issues *crdt.IssueStore, prs *crdt.PullRequestStore, tasks *crdt.TaskStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		limit := 50
-		if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 {
-			limit = l
-		}
+		offset, limit := ParsePagination(r)
 
 		events := make([]ActivityEvent, 0)
 
@@ -96,15 +92,14 @@ func GetActivity(issues *crdt.IssueStore, prs *crdt.PullRequestStore, tasks *crd
 			return events[i].Timestamp.After(events[j].Timestamp)
 		})
 
-		// Apply limit
-		if len(events) > limit {
-			events = events[:limit]
-		}
+		paged, total := PaginateSlice(events, offset, limit)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"events": events,
-			"total":  len(events),
+			"events": paged,
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
 		})
 	}
 }

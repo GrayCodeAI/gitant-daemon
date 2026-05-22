@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -17,34 +20,37 @@ import (
 )
 
 type Server struct {
-	router     *chi.Mux
-	port       int
-	identity   *identity.Identity
-	repos      *storage.RepositoryRegistry
-	issues     *crdt.IssueStore
-	prs        *crdt.PullRequestStore
-	blockstore *storage.Blockstore
-	agents     *handlers.AgentRegistry
-	webhooks   *webhooks.Manager
-	labels     *crdt.LabelStore
-	tasks      *crdt.TaskStore
-	protection *storage.ProtectionStore
+	router      *chi.Mux
+	httpServer  *http.Server
+	port        int
+	identity    *identity.Identity
+	repos       *storage.RepositoryRegistry
+	issues      *crdt.IssueStore
+	prs         *crdt.PullRequestStore
+	blockstore  *storage.Blockstore
+	agents      *handlers.AgentRegistry
+	webhooks    *webhooks.Manager
+	labels      *crdt.LabelStore
+	tasks       *crdt.TaskStore
+	protection  *storage.ProtectionStore
+	revocations *identity.RevocationStore
 }
 
-func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager) *Server {
+func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string) *Server {
 	s := &Server{
-		router:     chi.NewRouter(),
-		port:       port,
-		identity:   id,
-		repos:      repos,
-		issues:     issues,
-		prs:        prs,
-		blockstore: blockstore,
-		agents:     handlers.NewAgentRegistry(),
-		webhooks:   webhookMgr,
-		labels:     labels,
-		tasks:      tasks,
-		protection: protection,
+		router:      chi.NewRouter(),
+		port:        port,
+		identity:    id,
+		repos:       repos,
+		issues:      issues,
+		prs:         prs,
+		blockstore:  blockstore,
+		agents:      handlers.NewAgentRegistry(dataDir),
+		webhooks:    webhookMgr,
+		labels:      labels,
+		tasks:       tasks,
+		protection:  protection,
+		revocations: revocations,
 	}
 
 	s.setupMiddleware()
@@ -65,103 +71,102 @@ func (s *Server) setupMiddleware() {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
-	s.router.Use(authMiddleware.HTTPSignatureMiddleware)
+	s.router.Use(authMiddleware.NewHTTPSignatureMiddleware(s.revocations, s.identity.DID))
 }
 
 func (s *Server) setupRoutes() {
-	// Health and status
+	// Health and status (public)
 	s.router.Get("/health", s.handleHealth)
 	s.router.Get("/api/v1/status", s.handleStatus)
 
 	// Repository endpoints
 	s.router.Route("/api/v1/repos", func(r chi.Router) {
-		r.Post("/", handlers.CreateRepo(s.repos, s.webhooks))
+		// Public read-only
 		r.Get("/", handlers.ListRepos(s.repos))
 		r.Get("/{id}", handlers.GetRepo(s.repos))
-		r.Delete("/{id}", handlers.DeleteRepo(s.repos, s.webhooks))
-		r.Post("/{id}/star", handlers.StarRepo(s.repos))
-		r.Post("/{id}/unstar", handlers.UnstarRepo(s.repos))
 		r.Get("/{id}/stars", handlers.GetStarCount(s.repos))
-
-		// Push endpoint
-		r.Post("/{id}/push", handlers.PushObjects(s.repos, s.protection))
 		r.Get("/{id}/clone", handlers.CloneRepo(s.repos))
-
-		// Refs
 		r.Get("/{id}/refs", handlers.ListRefs(s.repos))
-
-		// Objects
 		r.Get("/{id}/objects/{hash}", handlers.GetObject(s.repos))
-
-		// Git smart-HTTP
 		r.Get("/{id}/info/refs", handlers.InfoRefs(s.repos))
-		r.Post("/{id}/git-upload-pack", handlers.GitUploadPack(s.repos))
-		r.Post("/{id}/git-receive-pack", handlers.GitReceivePack(s.repos, s.protection))
-
-		// Issues
-		r.Post("/{id}/issues", handlers.CreateIssue(s.issues, s.webhooks))
 		r.Get("/{id}/issues", handlers.ListIssues(s.issues))
 		r.Get("/{id}/issues/{issueId}", handlers.GetIssue(s.issues))
-		r.Post("/{id}/issues/{issueId}/comment", handlers.CommentIssue(s.issues, s.webhooks))
-		r.Post("/{id}/issues/{issueId}/close", handlers.CloseIssue(s.issues, s.webhooks))
 		r.Get("/{id}/issues/{issueId}/comments", handlers.ListIssueComments(s.issues))
-
-		// Pull Requests
-		r.Post("/{id}/prs", handlers.OpenPR(s.prs, s.webhooks))
 		r.Get("/{id}/prs", handlers.ListPRs(s.prs))
 		r.Get("/{id}/prs/{prId}", handlers.GetPR(s.prs))
-		r.Post("/{id}/prs/{prId}/review", handlers.ReviewPR(s.prs, s.webhooks))
-		r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs, s.webhooks))
 		r.Get("/{id}/prs/{prId}/comments", handlers.ListPRComments(s.prs))
-
-		// Branches
-		r.Post("/{id}/branches", handlers.CreateBranch(s.repos))
-
-		// Files
 		r.Get("/{id}/files", handlers.ListFiles(s.repos))
 		r.Get("/{id}/files/{path}", handlers.GetFile(s.repos))
 		r.Get("/{id}/search", handlers.SearchCode(s.repos))
-
-		// Commits
 		r.Get("/{id}/commits", handlers.GetCommitLog(s.repos))
 		r.Get("/{id}/diff", handlers.DiffCommits(s.repos))
-
-		// Labels
+		r.Get("/{id}/commits/{hash}/parents", handlers.DiffCommitAllParents(s.repos))
 		r.Get("/{id}/labels", handlers.ListLabels(s.labels))
-		r.Post("/{id}/labels", handlers.CreateLabel(s.labels))
-		r.Delete("/{id}/labels/{name}", handlers.DeleteLabel(s.labels))
-
-		// Branch protection
 		r.Get("/{id}/protections", handlers.ListProtections(s.protection))
 		r.Get("/{id}/protections/{branch}", handlers.GetProtection(s.protection))
-		r.Put("/{id}/protections/{branch}", handlers.SetProtection(s.protection))
-		r.Delete("/{id}/protections/{branch}", handlers.RemoveProtection(s.protection))
-
-		// Tasks
 		r.Get("/{id}/tasks", handlers.ListTasks(s.tasks))
-		r.Post("/{id}/tasks", handlers.CreateTask(s.tasks))
-		r.Post("/{id}/tasks/{taskId}/claim", handlers.ClaimTask(s.tasks))
-		r.Post("/{id}/tasks/{taskId}/complete", handlers.CompleteTask(s.tasks))
+
+		// Authenticated mutating endpoints
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Post("/", handlers.CreateRepo(s.repos, s.webhooks))
+			r.Delete("/{id}", handlers.DeleteRepo(s.repos, s.webhooks))
+			r.Post("/{id}/fork", handlers.ForkRepo(s.repos, s.webhooks))
+			r.Post("/{id}/star", handlers.StarRepo(s.repos))
+			r.Post("/{id}/unstar", handlers.UnstarRepo(s.repos))
+			r.Post("/{id}/push", handlers.PushObjects(s.repos, s.protection))
+			r.Post("/{id}/git-upload-pack", handlers.GitUploadPack(s.repos))
+			r.Post("/{id}/git-receive-pack", handlers.GitReceivePack(s.repos, s.protection))
+			r.Post("/{id}/issues", handlers.CreateIssue(s.issues, s.webhooks))
+			r.Post("/{id}/issues/{issueId}/comment", handlers.CommentIssue(s.issues, s.webhooks))
+			r.Post("/{id}/issues/{issueId}/close", handlers.CloseIssue(s.issues, s.webhooks))
+			r.Post("/{id}/prs", handlers.OpenPR(s.prs, s.webhooks))
+			r.Post("/{id}/prs/{prId}/review", handlers.ReviewPR(s.prs, s.webhooks))
+			r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs, s.webhooks))
+			r.Post("/{id}/branches", handlers.CreateBranch(s.repos))
+			r.Post("/{id}/labels", handlers.CreateLabel(s.labels))
+			r.Delete("/{id}/labels/{name}", handlers.DeleteLabel(s.labels))
+			r.Put("/{id}/protections/{branch}", handlers.SetProtection(s.protection))
+			r.Delete("/{id}/protections/{branch}", handlers.RemoveProtection(s.protection))
+			r.Post("/{id}/tasks", handlers.CreateTask(s.tasks))
+			r.Post("/{id}/tasks/{taskId}/claim", handlers.ClaimTask(s.tasks))
+			r.Post("/{id}/tasks/{taskId}/complete", handlers.CompleteTask(s.tasks))
+		})
 	})
 
-	// Activity feed
+	// Activity feed (public)
 	s.router.Get("/api/v1/activity", handlers.GetActivity(s.issues, s.prs, s.tasks))
 
 	// Agent endpoints
 	s.router.Route("/api/v1/agents", func(r chi.Router) {
 		r.Get("/", handlers.ListAgents(s.agents))
-		r.Post("/generate-did", handlers.GenerateDID())
-		r.Post("/verify", handlers.VerifyUCAN())
 		r.Get("/resolve/{did}", handlers.ResolveDID())
 		r.Get("/{did}", handlers.GetAgent(s.agents))
-		r.Post("/{did}/delegate", handlers.DelegateCapability(s.identity))
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Post("/generate-did", handlers.GenerateDID())
+			r.Post("/verify", handlers.VerifyUCAN())
+			r.Post("/{did}/delegate", handlers.DelegateCapability(s.identity))
+		})
 	})
 
 	// Webhook endpoints
 	s.router.Route("/api/v1/webhooks", func(r chi.Router) {
 		r.Get("/", handlers.ListWebhooks(s.webhooks))
-		r.Post("/", handlers.RegisterWebhook(s.webhooks))
-		r.Delete("/{id}", handlers.DeleteWebhook(s.webhooks))
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Post("/", handlers.RegisterWebhook(s.webhooks))
+			r.Delete("/{id}", handlers.DeleteWebhook(s.webhooks))
+		})
+	})
+
+	// UCAN endpoints
+	s.router.Route("/api/v1/ucan", func(r chi.Router) {
+		r.Get("/revocations", handlers.ListRevocations(s.revocations))
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Post("/revoke", handlers.RevokeUCAN(s.revocations))
+		})
 	})
 }
 
@@ -184,6 +189,50 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
+	s.httpServer = &http.Server{
+		Addr:         addr,
+		Handler:      s.router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 	fmt.Printf("gitant daemon listening on %s\n", addr)
-	return http.ListenAndServe(addr, s.router)
+	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("listen error: %w", err)
+	}
+	return nil
+}
+
+// Shutdown gracefully stops the HTTP server and persists all stores to disk.
+func (s *Server) Shutdown(ctx context.Context) error {
+	fmt.Println("Shutting down gitant daemon...")
+
+	// Stop accepting new connections; wait for in-flight requests to finish.
+	if s.httpServer != nil {
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "HTTP shutdown error: %v\n", err)
+		}
+	}
+
+	// Persist all stores.
+	var firstErr error
+	save := func(name string, fn func() error) {
+		if err := fn(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving %s: %v\n", name, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	save("issues", s.issues.Save)
+	save("prs", s.prs.Save)
+	save("blockstore", s.blockstore.Save)
+	save("labels", s.labels.Save)
+	save("tasks", s.tasks.Save)
+	save("protections", s.protection.Save)
+	save("webhooks", s.webhooks.Save)
+	save("revocations", s.revocations.Save)
+
+	fmt.Println("Shutdown complete.")
+	return firstErr
 }

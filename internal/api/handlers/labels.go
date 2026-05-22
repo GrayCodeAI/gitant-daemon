@@ -11,13 +11,18 @@ import (
 // ListLabels lists all labels for a repository
 func ListLabels(store *crdt.LabelStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		repoID := chi.URLParam(r, "id")
 		labels := store.List(repoID)
 
+		paged, total := PaginateSlice(labels, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"labels": labels,
-			"total":  len(labels),
+			"labels": paged,
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
 		})
 	}
 }

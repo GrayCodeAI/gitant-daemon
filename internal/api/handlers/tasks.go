@@ -13,15 +13,38 @@ import (
 // ListTasks lists tasks for a repository
 func ListTasks(store *crdt.TaskStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		repoID := chi.URLParam(r, "id")
 		status := crdt.TaskStatus(r.URL.Query().Get("status"))
 
 		tasks := store.List(repoID, status)
 
+		// Convert to map slice for pagination
+		result := make([]map[string]interface{}, len(tasks))
+		for i, task := range tasks {
+			result[i] = map[string]interface{}{
+				"id":           task.ID,
+				"repo":         task.RepoID,
+				"title":        task.Title,
+				"description":  task.Description,
+				"status":       string(task.Status),
+				"claimed_by":   task.ClaimedBy,
+				"created_by":   task.CreatedBy,
+				"created_at":   task.CreatedAt,
+				"claimed_at":   task.ClaimedAt,
+				"completed_at": task.CompletedAt,
+				"result":       task.Result,
+			}
+		}
+
+		paged, total := PaginateSlice(result, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"tasks": tasks,
-			"total": len(tasks),
+			"tasks":  paged,
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
 		})
 	}
 }

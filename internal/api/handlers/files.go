@@ -78,10 +78,15 @@ func ListFiles(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			})
 		}
 
+		offset, limit := ParsePagination(r)
+		paged, total := PaginateSlice(result, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"entries": result,
-			"total":   len(result),
+			"entries": paged,
+			"total":   total,
+			"offset":  offset,
+			"limit":   limit,
 			"path":    path,
 		})
 	}

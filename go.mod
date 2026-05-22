@@ -1,6 +1,6 @@
 module github.com/lakshmanpatel/gitant
 
-go 1.25.7
+go 1.26.1
 
 require (
 	github.com/go-chi/chi/v5 v5.1.0

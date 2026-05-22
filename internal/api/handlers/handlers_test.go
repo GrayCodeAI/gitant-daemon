@@ -309,6 +309,97 @@ func TestMergePR(t *testing.T) {
 	}
 }
 
+// --- Fork Handlers ---
+
+func TestForkRepo(t *testing.T) {
+	reg := setupTestRegistry(t)
+	wm := setupTestWebhookManager(t)
+	reg.Create("source", "source", "original", false)
+
+	r := chiRouter()
+	r.Post("/{id}/fork", ForkRepo(reg, wm))
+
+	body := `{"name":"my-fork"}`
+	req := httptest.NewRequest("POST", "/source/fork", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var result map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &result)
+	if result["id"] != "my-fork" {
+		t.Fatalf("expected id=my-fork, got %v", result["id"])
+	}
+	if result["forked_from"] != "source" {
+		t.Fatalf("expected forked_from=source, got %v", result["forked_from"])
+	}
+}
+
+func TestForkRepoMissingName(t *testing.T) {
+	reg := setupTestRegistry(t)
+	wm := setupTestWebhookManager(t)
+	reg.Create("source", "source", "", false)
+
+	r := chiRouter()
+	r.Post("/{id}/fork", ForkRepo(reg, wm))
+
+	body := `{}`
+	req := httptest.NewRequest("POST", "/source/fork", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestForkRepoNotFound(t *testing.T) {
+	reg := setupTestRegistry(t)
+	wm := setupTestWebhookManager(t)
+
+	r := chiRouter()
+	r.Post("/{id}/fork", ForkRepo(reg, wm))
+
+	body := `{"name":"fork"}`
+	req := httptest.NewRequest("POST", "/nonexistent/fork", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestForkRepoDuplicate(t *testing.T) {
+	reg := setupTestRegistry(t)
+	wm := setupTestWebhookManager(t)
+	reg.Create("source", "source", "", false)
+	reg.Create("my-fork", "my-fork", "", false)
+
+	r := chiRouter()
+	r.Post("/{id}/fork", ForkRepo(reg, wm))
+
+	body := `{"name":"my-fork"}`
+	req := httptest.NewRequest("POST", "/source/fork", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
+	}
+}
+
 // --- Ref/Repo Handlers ---
 
 func TestPushObjects(t *testing.T) {
@@ -423,7 +514,7 @@ func TestResolveDID(t *testing.T) {
 }
 
 func TestListAgents(t *testing.T) {
-	registry := NewAgentRegistry()
+	registry := NewAgentRegistry("")
 	registry.Record("did:key:zabc123")
 	registry.Record("did:key:zdef456")
 
@@ -445,7 +536,7 @@ func TestListAgents(t *testing.T) {
 }
 
 func TestGetAgent(t *testing.T) {
-	registry := NewAgentRegistry()
+	registry := NewAgentRegistry("")
 	registry.Record("did:key:ztest123")
 
 	r := chiRouter()

@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/lakshmanpatel/gitant/internal/api"
 	"github.com/lakshmanpatel/gitant/internal/cli"
@@ -83,7 +87,7 @@ var serveCmd = &cobra.Command{
 		// Create stores with persistence
 		issueStore := crdt.NewIssueStore(filepath.Join(dataStoreDir, "issues.json"))
 		prStore := crdt.NewPullRequestStore(filepath.Join(dataStoreDir, "prs.json"))
-		blockstore := storage.NewBlockstore(filepath.Join(dataStoreDir, "blockstore.json"))
+		blockstore := storage.NewBlockstore(filepath.Join(dataStoreDir, "blockstore.json"), filepath.Join(dataStoreDir, "blocks"))
 		labelStore := crdt.NewLabelStore(dataStoreDir)
 		taskStore := crdt.NewTaskStore(dataStoreDir)
 		protectionStore := storage.NewProtectionStore(dataStoreDir)
@@ -115,10 +119,41 @@ var serveCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Warning: failed to load webhooks: %v\n", err)
 		}
 
-		// Create and start server
-		server := api.NewServer(port, id, repos, issueStore, prStore, blockstore, labelStore, taskStore, protectionStore, webhookManager)
-		if err := server.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
+		// Create revocation store
+		revocationStore := identity.NewRevocationStore(dataStoreDir)
+		if err := revocationStore.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load revocations: %v\n", err)
+		}
+
+		// Create server
+		server := api.NewServer(port, id, repos, issueStore, prStore, blockstore, labelStore, taskStore, protectionStore, webhookManager, revocationStore, dataStoreDir)
+
+		// Start server in a goroutine
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- server.Start()
+		}()
+
+		// Wait for interrupt signal or server error
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+		select {
+		case sig := <-sigCh:
+			fmt.Printf("\nReceived signal: %v\n", sig)
+		case err := <-errCh:
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
+		// Graceful shutdown with 10s timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Shutdown error: %v\n", err)
 			os.Exit(1)
 		}
 	},

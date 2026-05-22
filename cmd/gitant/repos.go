@@ -75,11 +75,32 @@ var repoUnstarCmd = &cobra.Command{
 	},
 }
 
+var repoForkCmd = &cobra.Command{
+	Use:   "fork [source] [name]",
+	Short: "Fork a repository",
+	Args:  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		daemonURL, _ := cmd.Flags().GetString("daemon-url")
+
+		client := cli.NewClient(daemonURL)
+		var result map[string]interface{}
+		body := map[string]string{"name": args[1]}
+		if err := client.Post(fmt.Sprintf("/api/v1/repos/%s/fork", args[0]), body, &result); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Forked %s -> %s\n", args[0], result["id"])
+		if forkedFrom, ok := result["forked_from"]; ok {
+			fmt.Printf("Forked from: %s\n", forkedFrom)
+		}
+	},
+}
+
 func init() {
-	for _, c := range []*cobra.Command{repoListCmd, repoStarCmd, repoUnstarCmd} {
+	for _, c := range []*cobra.Command{repoListCmd, repoStarCmd, repoUnstarCmd, repoForkCmd} {
 		c.Flags().String("daemon-url", "", "Daemon URL (default: http://localhost:7777)")
 	}
 
-	repoCmd.AddCommand(repoListCmd, repoStarCmd, repoUnstarCmd)
+	repoCmd.AddCommand(repoListCmd, repoStarCmd, repoUnstarCmd, repoForkCmd)
 	rootCmd.AddCommand(repoCmd)
 }

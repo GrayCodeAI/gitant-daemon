@@ -45,11 +45,17 @@ func RegisterWebhook(manager *webhooks.Manager) http.HandlerFunc {
 // ListWebhooks lists all registered webhooks
 func ListWebhooks(manager *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		whs := manager.List()
+
+		paged, total := PaginateSlice(whs, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"webhooks": whs,
-			"total":    len(whs),
+			"webhooks": paged,
+			"total":    total,
+			"offset":   offset,
+			"limit":    limit,
 		})
 	}
 }

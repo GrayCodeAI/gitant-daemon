@@ -3,11 +3,13 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lakshmanpatel/gitant/internal/identity"
+	"github.com/lakshmanpatel/gitant/internal/persistence"
 )
 
 // Agent represents a known agent in the registry
@@ -22,15 +24,33 @@ type Agent struct {
 
 // AgentRegistry tracks known agents
 type AgentRegistry struct {
-	mu     sync.RWMutex
-	agents map[string]*Agent
+	mu      sync.RWMutex
+	agents  map[string]*Agent
+	dataDir string
 }
 
 // NewAgentRegistry creates a new agent registry
-func NewAgentRegistry() *AgentRegistry {
+func NewAgentRegistry(dataDir string) *AgentRegistry {
 	return &AgentRegistry{
-		agents: make(map[string]*Agent),
+		agents:  make(map[string]*Agent),
+		dataDir: dataDir,
 	}
+}
+
+// Load loads persisted agent data
+func (r *AgentRegistry) Load() error {
+	if r.dataDir == "" {
+		return nil
+	}
+	return persistence.LoadJSON(filepath.Join(r.dataDir, "agents.json"), &r.agents)
+}
+
+// Save persists agent data
+func (r *AgentRegistry) Save() error {
+	if r.dataDir == "" {
+		return nil
+	}
+	return persistence.SaveJSON(filepath.Join(r.dataDir, "agents.json"), r.agents)
 }
 
 // Record records an agent interaction
@@ -80,11 +100,17 @@ func min(a, b float64) float64 {
 // ListAgents lists all known agents
 func ListAgents(registry *AgentRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		agents := registry.List()
+
+		paged, total := PaginateSlice(agents, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"agents": agents,
-			"total":  len(agents),
+			"agents": paged,
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
 		})
 	}
 }

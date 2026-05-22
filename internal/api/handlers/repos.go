@@ -63,6 +63,7 @@ func CreateRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http
 // ListRepos lists all repositories
 func ListRepos(registry *storage.RepositoryRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		repos := registry.List()
 
 		result := make([]map[string]interface{}, 0, len(repos))
@@ -76,10 +77,14 @@ func ListRepos(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			})
 		}
 
+		paged, total := PaginateSlice(result, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"repos": result,
-			"total": len(result),
+			"repos":  paged,
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
 		})
 	}
 }
@@ -299,6 +304,7 @@ func GetObject(registry *storage.RepositoryRegistry) http.HandlerFunc {
 // ListRefs lists all references in a repository
 func ListRefs(registry *storage.RepositoryRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		id := chi.URLParam(r, "id")
 
 		repo, err := registry.Open(id)
@@ -313,10 +319,67 @@ func ListRefs(registry *storage.RepositoryRegistry) http.HandlerFunc {
 			return
 		}
 
+		paged, total := PaginateSlice(refs, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"refs":  refs,
-			"total": len(refs),
+			"refs":   paged,
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
+		})
+	}
+}
+
+// ForkRepo forks a repository
+func ForkRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sourceID := chi.URLParam(r, "id")
+
+		var req struct {
+			Name string `json:"name"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if req.Name == "" {
+			http.Error(w, "Name is required", http.StatusBadRequest)
+			return
+		}
+
+		entry, err := registry.Fork(sourceID, req.Name, "anonymous")
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				http.Error(w, err.Error(), http.StatusNotFound)
+			} else if strings.Contains(err.Error(), "already exists") {
+				http.Error(w, err.Error(), http.StatusConflict)
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventRepoCreated,
+			Repo: entry.Name,
+			Data: map[string]interface{}{
+				"id":          entry.ID,
+				"forked_from": entry.ForkedFrom,
+			},
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":          entry.ID,
+			"name":        entry.Name,
+			"description": entry.Description,
+			"private":     entry.Private,
+			"created_at":  entry.CreatedAt,
+			"forked_from": entry.ForkedFrom,
 		})
 	}
 }

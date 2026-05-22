@@ -41,6 +41,7 @@ func GetProtection(store *storage.ProtectionStore) http.HandlerFunc {
 // ListProtections returns all protection rules for a repo
 func ListProtections(store *storage.ProtectionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		repoID := chi.URLParam(r, "id")
 
 		protections := store.List(repoID)
@@ -55,10 +56,14 @@ func ListProtections(store *storage.ProtectionStore) http.HandlerFunc {
 			})
 		}
 
+		paged, total := PaginateSlice(result, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"protections": result,
-			"total":       len(result),
+			"protections": paged,
+			"total":       total,
+			"offset":      offset,
+			"limit":       limit,
 		})
 	}
 }

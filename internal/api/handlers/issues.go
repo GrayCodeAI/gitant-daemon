@@ -74,6 +74,7 @@ func CreateIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc 
 // ListIssues lists all issues in a repository
 func ListIssues(store *crdt.IssueStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		repoID := chi.URLParam(r, "id")
 
 		issues := store.List(repoID)
@@ -92,10 +93,14 @@ func ListIssues(store *crdt.IssueStore) http.HandlerFunc {
 			})
 		}
 
+		paged, total := PaginateSlice(result, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"issues": result,
-			"total":  len(result),
+			"issues": paged,
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
 		})
 	}
 }
@@ -218,6 +223,7 @@ func CloseIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc {
 // ListIssueComments lists all comments on an issue
 func ListIssueComments(store *crdt.IssueStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		repoID := chi.URLParam(r, "id")
 		issueID := chi.URLParam(r, "issueId")
 
@@ -239,10 +245,14 @@ func ListIssueComments(store *crdt.IssueStore) http.HandlerFunc {
 			}
 		}
 
+		paged, total := PaginateSlice(comments, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"comments": comments,
-			"total":    len(comments),
+			"comments": paged,
+			"total":    total,
+			"offset":   offset,
+			"limit":    limit,
 		})
 	}
 }

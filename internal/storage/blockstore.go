@@ -2,38 +2,35 @@ package storage
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/lakshmanpatel/gitant/internal/persistence"
 )
 
-// blockstoreData is the JSON-serializable representation
-type blockstoreData struct {
-	Blocks map[string]string    `json:"blocks"` // hash -> base64 content
-	Index  map[string]plumbing.Hash `json:"index"`
-}
-
-// Blockstore provides content-addressed storage for git objects
-// This is the bridge between git objects and IPFS blocks
+// Blockstore provides content-addressed storage for git objects.
+// Blocks are stored as individual files on disk; only the index is kept in memory.
 type Blockstore struct {
-	mu      sync.RWMutex
-	blocks  map[string][]byte
-	index   map[string]plumbing.Hash
-	path    string // persistence file path
+	mu        sync.RWMutex
+	index     map[string]plumbing.Hash
+	path      string // index JSON file path
+	blocksDir string // directory for block files
 }
 
-// NewBlockstore creates a new blockstore
-func NewBlockstore(path string) *Blockstore {
+// NewBlockstore creates a new file-per-block blockstore
+func NewBlockstore(path, blocksDir string) *Blockstore {
 	return &Blockstore{
-		blocks: make(map[string][]byte),
-		index:  make(map[string]plumbing.Hash),
-		path:   path,
+		index:     make(map[string]plumbing.Hash),
+		path:      path,
+		blocksDir: blocksDir,
 	}
 }
 
-// Load reads persisted blocks from disk
+// Load reads persisted index from disk, migrating from old format if needed
 func (bs *Blockstore) Load() error {
 	if bs.path == "" {
 		return nil
@@ -41,97 +38,157 @@ func (bs *Blockstore) Load() error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
-	var data blockstoreData
-	if err := persistence.LoadJSON(bs.path, &data); err != nil {
-		return err
-	}
-	if data.Blocks != nil {
-		for k, v := range data.Blocks {
-			decoded, err := base64.StdEncoding.DecodeString(v)
-			if err != nil {
-				continue
-			}
-			bs.blocks[k] = decoded
+	// Ensure blocks directory exists
+	if bs.blocksDir != "" {
+		if err := os.MkdirAll(bs.blocksDir, 0755); err != nil {
+			return fmt.Errorf("creating blocks directory: %w", err)
 		}
 	}
-	if data.Index != nil {
-		bs.index = data.Index
+
+	// Load raw JSON to detect format
+	var raw map[string]json.RawMessage
+	if err := persistence.LoadJSON(bs.path, &raw); err != nil {
+		return err
 	}
+	if raw == nil {
+		return nil // empty file
+	}
+
+	// Check if this is legacy format (has "blocks" key)
+	if blocksRaw, ok := raw["blocks"]; ok {
+		var blocks map[string]string
+		if err := json.Unmarshal(blocksRaw, &blocks); err != nil {
+			return fmt.Errorf("parsing legacy blocks: %w", err)
+		}
+
+		// Migrate: write each block to its own file and build index from keys
+		if bs.blocksDir != "" {
+			if err := bs.ensureBlocksDir(); err != nil {
+				return err
+			}
+			for k, v := range blocks {
+				decoded, err := base64.StdEncoding.DecodeString(v)
+				if err != nil {
+					continue
+				}
+				blockPath := filepath.Join(bs.blocksDir, k)
+				if err := os.WriteFile(blockPath, decoded, 0644); err != nil {
+					return fmt.Errorf("migrating block %s: %w", k, err)
+				}
+				// Build index from block keys
+				bs.index[k] = plumbing.NewHash(k)
+			}
+		}
+
+		// Save in new format to complete migration
+		return bs.saveIndex()
+	}
+
+	// New format: has "index" key
+	if indexRaw, ok := raw["index"]; ok {
+		var idx map[string]plumbing.Hash
+		if err := json.Unmarshal(indexRaw, &idx); err != nil {
+			return fmt.Errorf("parsing index: %w", err)
+		}
+		bs.index = idx
+	}
+
 	return nil
 }
 
-// Save writes all blocks to disk
-func (bs *Blockstore) Save() error {
+// saveIndex persists just the index to disk (no block content)
+func (bs *Blockstore) saveIndex() error {
 	if bs.path == "" {
 		return nil
 	}
-	bs.mu.RLock()
-	blocks := make(map[string][]byte, len(bs.blocks))
-	for k, v := range bs.blocks {
-		blocks[k] = v
-	}
-	index := make(map[string]plumbing.Hash, len(bs.index))
-	for k, v := range bs.index {
-		index[k] = v
-	}
-	bs.mu.RUnlock()
-
-	encoded := make(map[string]string, len(blocks))
-	for k, v := range blocks {
-		encoded[k] = base64.StdEncoding.EncodeToString(v)
-	}
-	data := blockstoreData{
-		Blocks: encoded,
-		Index:  index,
-	}
-	return persistence.SaveJSON(bs.path, data)
+	return persistence.SaveJSON(bs.path, map[string]interface{}{"index": bs.index})
 }
 
-// Put stores a block with its content hash as key
+// Save writes the index to disk (block files are already on disk)
+func (bs *Blockstore) Save() error {
+	bs.mu.RLock()
+	defer bs.mu.RUnlock()
+	return bs.saveIndex()
+}
+
+// ensureBlocksDir creates the blocks directory if it doesn't exist
+func (bs *Blockstore) ensureBlocksDir() error {
+	if bs.blocksDir == "" {
+		return nil
+	}
+	return os.MkdirAll(bs.blocksDir, 0755)
+}
+
+// Put stores a block by writing it to disk
 func (bs *Blockstore) Put(hash plumbing.Hash, data []byte) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
 	key := hash.String()
-	bs.blocks[key] = data
-	bs.index[key] = hash
 
-	return nil
+	// Write block file to disk
+	if bs.blocksDir != "" {
+		if err := bs.ensureBlocksDir(); err != nil {
+			return err
+		}
+		blockPath := filepath.Join(bs.blocksDir, key)
+		if err := os.WriteFile(blockPath, data, 0644); err != nil {
+			return fmt.Errorf("writing block %s: %w", key, err)
+		}
+	}
+
+	bs.index[key] = hash
+	return bs.saveIndex()
 }
 
-// Get retrieves a block by its hash
+// Get retrieves a block by reading from disk
 func (bs *Blockstore) Get(hash plumbing.Hash) ([]byte, error) {
 	bs.mu.RLock()
-	defer bs.mu.RUnlock()
-
 	key := hash.String()
-	data, ok := bs.blocks[key]
+	_, ok := bs.index[key]
+	bs.mu.RUnlock()
+
 	if !ok {
 		return nil, fmt.Errorf("block not found: %s", key)
+	}
+
+	if bs.blocksDir == "" {
+		return nil, fmt.Errorf("blocks directory not configured")
+	}
+
+	blockPath := filepath.Join(bs.blocksDir, key)
+	data, err := os.ReadFile(blockPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading block %s: %w", key, err)
 	}
 
 	return data, nil
 }
 
-// Has checks if a block exists in the store
+// Has checks if a block exists in the index
 func (bs *Blockstore) Has(hash plumbing.Hash) bool {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
-	_, ok := bs.blocks[hash.String()]
+	_, ok := bs.index[hash.String()]
 	return ok
 }
 
-// Delete removes a block from the store
+// Delete removes a block file and its index entry
 func (bs *Blockstore) Delete(hash plumbing.Hash) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
 	key := hash.String()
-	delete(bs.blocks, key)
 	delete(bs.index, key)
 
-	return bs.Save()
+	// Remove block file
+	if bs.blocksDir != "" {
+		blockPath := filepath.Join(bs.blocksDir, key)
+		os.Remove(blockPath) // ignore error if file doesn't exist
+	}
+
+	return bs.saveIndex()
 }
 
 // List returns all block hashes in the store
@@ -152,21 +209,34 @@ func (bs *Blockstore) Size() int {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
-	return len(bs.blocks)
+	return len(bs.index)
 }
 
-// PutAll stores multiple blocks
+// PutAll stores multiple blocks by writing each to disk
 func (bs *Blockstore) PutAll(blocks map[plumbing.Hash][]byte) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
+	if bs.blocksDir != "" {
+		if err := bs.ensureBlocksDir(); err != nil {
+			return err
+		}
+	}
+
 	for hash, data := range blocks {
 		key := hash.String()
-		bs.blocks[key] = data
+
+		if bs.blocksDir != "" {
+			blockPath := filepath.Join(bs.blocksDir, key)
+			if err := os.WriteFile(blockPath, data, 0644); err != nil {
+				return fmt.Errorf("writing block %s: %w", key, err)
+			}
+		}
+
 		bs.index[key] = hash
 	}
 
-	return nil
+	return bs.saveIndex()
 }
 
 // SaveBlock persists after a mutation (convenience for handlers)
@@ -176,15 +246,12 @@ func (bs *Blockstore) SaveBlock() error {
 
 // GetAll retrieves multiple blocks by their hashes
 func (bs *Blockstore) GetAll(hashes []plumbing.Hash) (map[plumbing.Hash][]byte, error) {
-	bs.mu.RLock()
-	defer bs.mu.RUnlock()
-
 	result := make(map[plumbing.Hash][]byte)
+
 	for _, hash := range hashes {
-		key := hash.String()
-		data, ok := bs.blocks[key]
-		if !ok {
-			return nil, fmt.Errorf("block not found: %s", key)
+		data, err := bs.Get(hash)
+		if err != nil {
+			return nil, err
 		}
 		result[hash] = data
 	}

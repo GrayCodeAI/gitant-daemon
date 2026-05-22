@@ -73,6 +73,7 @@ func OpenPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFunc
 // ListPRs lists all pull requests in a repository
 func ListPRs(store *crdt.PullRequestStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		repoID := chi.URLParam(r, "id")
 
 		prs := store.List(repoID)
@@ -92,10 +93,14 @@ func ListPRs(store *crdt.PullRequestStore) http.HandlerFunc {
 			})
 		}
 
+		paged, total := PaginateSlice(result, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"prs":   result,
-			"total": len(result),
+			"prs":    paged,
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
 		})
 	}
 }
@@ -226,6 +231,7 @@ func MergePR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFun
 // ListPRComments lists all comments on a pull request
 func ListPRComments(store *crdt.PullRequestStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		offset, limit := ParsePagination(r)
 		repoID := chi.URLParam(r, "id")
 		prID := chi.URLParam(r, "prId")
 
@@ -247,10 +253,14 @@ func ListPRComments(store *crdt.PullRequestStore) http.HandlerFunc {
 			}
 		}
 
+		paged, total := PaginateSlice(comments, offset, limit)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"comments": comments,
-			"total":    len(comments),
+			"comments": paged,
+			"total":    total,
+			"offset":   offset,
+			"limit":    limit,
 		})
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/lakshmanpatel/gitant/internal/persistence"
 )
 
@@ -20,6 +21,7 @@ type RepoEntry struct {
 	CreatedAt   string   `json:"created_at"`
 	Stars       int      `json:"stars"`
 	StarredBy   []string `json:"starred_by"`
+	ForkedFrom  string   `json:"forked_from,omitempty"`
 }
 
 // RepositoryRegistry manages multiple repositories
@@ -207,4 +209,96 @@ func (r *RepositoryRegistry) Delete(id string) error {
 
 	delete(r.repos, id)
 	return r.Save()
+}
+
+// Fork creates a copy of sourceID as forkID, copying all git objects and refs.
+func (r *RepositoryRegistry) Fork(sourceID, forkID, owner string) (*RepoEntry, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	sourceEntry, ok := r.repos[sourceID]
+	if !ok {
+		return nil, fmt.Errorf("source repository not found: %s", sourceID)
+	}
+
+	if _, ok := r.repos[forkID]; ok {
+		return nil, fmt.Errorf("repository already exists: %s", forkID)
+	}
+
+	sourceRepo, err := OpenRepository(sourceEntry.Path)
+	if err != nil {
+		return nil, fmt.Errorf("opening source repository: %w", err)
+	}
+
+	forkPath := filepath.Join(r.baseDir, forkID)
+	forkRepo, err := InitRepository(forkPath)
+	if err != nil {
+		return nil, fmt.Errorf("initializing fork repository: %w", err)
+	}
+
+	// Copy all objects from source to fork
+	if err := copyObjects(sourceRepo, forkRepo); err != nil {
+		os.RemoveAll(forkPath)
+		return nil, fmt.Errorf("copying objects: %w", err)
+	}
+
+	// Copy all refs from source to fork
+	if err := copyRefs(sourceRepo, forkRepo); err != nil {
+		os.RemoveAll(forkPath)
+		return nil, fmt.Errorf("copying refs: %w", err)
+	}
+
+	entry := &RepoEntry{
+		ID:         forkID,
+		Name:       forkID,
+		Path:       forkPath,
+		CreatedAt:  time.Now().Format(time.RFC3339),
+		ForkedFrom: sourceID,
+	}
+	r.repos[forkID] = entry
+
+	return entry, r.saveLocked()
+}
+
+// saveLocked persists the registry; caller must hold r.mu.
+func (r *RepositoryRegistry) saveLocked() error {
+	if r.dataDir == "" {
+		return nil
+	}
+	return persistence.SaveJSON(filepath.Join(r.dataDir, "registry.json"), r.repos)
+}
+
+// copyObjects copies all git objects from src to dst.
+func copyObjects(src, dst *Repository) error {
+	iter, err := src.repo.Storer.IterEncodedObjects(plumbing.AnyObject)
+	if err != nil {
+		return fmt.Errorf("iterating objects: %w", err)
+	}
+
+	return iter.ForEach(func(obj plumbing.EncodedObject) error {
+		reader, err := obj.Reader()
+		if err != nil {
+			return fmt.Errorf("reading object %s: %w", obj.Hash(), err)
+		}
+		defer reader.Close()
+
+		buf := make([]byte, obj.Size())
+		if _, err := reader.Read(buf); err != nil {
+			return fmt.Errorf("reading object content %s: %w", obj.Hash(), err)
+		}
+
+		return dst.StoreObject(obj.Hash(), obj.Type(), buf)
+	})
+}
+
+// copyRefs copies all references from src to dst.
+func copyRefs(src, dst *Repository) error {
+	refs, err := src.repo.References()
+	if err != nil {
+		return fmt.Errorf("listing references: %w", err)
+	}
+
+	return refs.ForEach(func(ref *plumbing.Reference) error {
+		return dst.repo.Storer.SetReference(ref)
+	})
 }
