@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 )
 
@@ -153,19 +155,112 @@ func SearchCode(registry *storage.RepositoryRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		query := r.URL.Query().Get("q")
+		ref := r.URL.Query().Get("ref")
 
 		if query == "" {
 			http.Error(w, "Query parameter 'q' is required", http.StatusBadRequest)
 			return
 		}
 
-		_ = repoID
-		// TODO: Implement full-text search across blobs
+		repo, err := registry.Open(repoID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		// Get starting commit
+		var startHash plumbing.Hash
+		if ref != "" {
+			hash, err := repo.GetBranch(ref)
+			if err != nil {
+				http.Error(w, "Branch not found: "+ref, http.StatusNotFound)
+				return
+			}
+			startHash = hash
+		} else {
+			refs, err := repo.ListAllRefs()
+			if err != nil || len(refs) == 0 {
+				http.Error(w, "No refs found", http.StatusNotFound)
+				return
+			}
+			for _, ref := range refs {
+				if strings.HasSuffix(ref.Name, "/HEAD") || strings.HasSuffix(ref.Name, "/main") || strings.HasSuffix(ref.Name, "/master") {
+					startHash = plumbing.NewHash(ref.Hash)
+					break
+				}
+			}
+			if startHash.IsZero() {
+				startHash = plumbing.NewHash(refs[0].Hash)
+			}
+		}
+
+		// Get commit to access tree
+		commit, err := repo.GetCommit(startHash)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Walk tree and search blobs
+		results := searchTree(repo, commit.TreeHash, "", query)
+
+		paged, total := PaginateSlice(results, 0, 50) // search capped at 50 results
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"query":   query,
-			"results": []interface{}{},
-			"total":   0,
+			"results": paged,
+			"total":   total,
 		})
 	}
+}
+
+// searchTree recursively walks the tree and finds blobs containing the query
+func searchTree(repo *storage.Repository, treeHash plumbing.Hash, path string, query string) []map[string]interface{} {
+	var results []map[string]interface{}
+
+	entries, err := repo.ListTreeEntries(treeHash, path)
+	if err != nil {
+		return results
+	}
+
+	lowerQuery := strings.ToLower(query)
+
+	for _, entry := range entries {
+		entryPath := entry.Name
+		if path != "" {
+			entryPath = path + "/" + entry.Name
+		}
+
+		if entry.Mode == filemode.Dir {
+			subResults := searchTree(repo, entry.Hash, entryPath, query)
+			results = append(results, subResults...)
+		} else {
+			content, err := repo.GetFileFromTree(treeHash, entryPath)
+			if err != nil {
+				continue
+			}
+
+			lines := strings.Split(string(content), "\n")
+			for i, line := range lines {
+				if strings.Contains(strings.ToLower(line), lowerQuery) {
+					context := line
+					if len(context) > 200 {
+						context = context[:200] + "..."
+					}
+					results = append(results, map[string]interface{}{
+						"file":    entryPath,
+						"line":    i + 1,
+						"context": fmt.Sprintf("%s:%d: %s", entryPath, i+1, strings.TrimSpace(context)),
+					})
+
+					if len(results) >= 100 {
+						return results
+					}
+				}
+			}
+		}
+	}
+
+	return results
 }

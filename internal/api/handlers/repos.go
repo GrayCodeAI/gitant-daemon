@@ -142,7 +142,7 @@ func DeleteRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http
 }
 
 // PushObjects pushes objects to a repository
-func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.ProtectionStore) http.HandlerFunc {
+func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.ProtectionStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 
@@ -232,6 +232,20 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 				"errors":  errors,
 			})
 		} else {
+			// Dispatch push webhook event
+			refNames := make([]string, 0, len(req.RefUpdates))
+			for _, u := range req.RefUpdates {
+				refNames = append(refNames, u.Name)
+			}
+			wm.Dispatch(webhooks.Event{
+				Type: webhooks.EventPush,
+				Repo: id,
+				Data: map[string]interface{}{
+					"refs":    refNames,
+					"objects": len(req.Objects),
+				},
+			})
+
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": true,
 				"repo":    id,

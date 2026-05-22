@@ -408,7 +408,8 @@ func TestPushObjects(t *testing.T) {
 	reg.Create("repo", "repo", "", false)
 
 	r := chiRouter()
-	r.Post("/{id}/push", PushObjects(reg, protectionStore))
+	wm := setupTestWebhookManager(t)
+	r.Post("/{id}/push", PushObjects(reg, protectionStore, wm))
 
 	body := `{"ref_updates":[{"name":"refs/heads/main","new_hash":"abc123def456abc123def456abc123def456abc1"}]}`
 	req := httptest.NewRequest("POST", "/repo/push", bytes.NewBufferString(body))

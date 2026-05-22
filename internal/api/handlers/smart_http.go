@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/lakshmanpatel/gitant/internal/git"
 	"github.com/lakshmanpatel/gitant/internal/storage"
+	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
 // InfoRefs handles GET /{id}/info/refs?service=git-upload-pack|git-receive-pack
@@ -109,7 +110,7 @@ func GitUploadPack(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 // GitReceivePack handles POST /{id}/git-receive-pack
 // Receives a packfile and ref updates
-func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *storage.ProtectionStore) http.HandlerFunc {
+func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *storage.ProtectionStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 
@@ -190,6 +191,19 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 		}
 		response.WriteString(git.FlushPacket())
 		w.Write([]byte(response.String()))
+
+		// Dispatch push webhook event
+		refNames := make([]string, 0, len(updates))
+		for _, u := range updates {
+			refNames = append(refNames, u.RefName)
+		}
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventPush,
+			Repo: id,
+			Data: map[string]interface{}{
+				"refs": refNames,
+			},
+		})
 	}
 }
 
