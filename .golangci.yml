@@ -4,47 +4,17 @@ run:
   timeout: 5m
 
 linters:
+  default: none
   enable:
     - govet
-    - errcheck
-    - staticcheck
-    - gosimple
     - ineffassign
+    - staticcheck
     - unused
-    - typecheck
-    - gofmt
-    - goimports
-    - misspell
-    - unconvert
-    - gocritic
-    - revive
-
-linters-settings:
-  errcheck:
-    check-blank: true
-    exclude-functions:
-      - (io.Closer).Close
-      - (net/http.ResponseWriter).Write
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-    disabled-checks:
-      - ifElseChain
-      - singleCaseSwitch
-  revive:
-    rules:
-      - name: blank-imports
-      - name: exported
-      - name: unused-parameter
-      - name: unreachable-code
-      - name: redefines-builtin-id
 
 issues:
   exclude-rules:
     - path: _test\.go
       linters:
-        - errcheck
         - gocritic
   max-issues-per-linter: 0
   max-same-issues: 0

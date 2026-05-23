@@ -11,7 +11,7 @@ import (
 
 // GossipSub wraps the GossipSub protocol for pub/sub messaging
 type GossipSub struct {
-	mu   sync.RWMutex
+	_   sync.RWMutex
 	ps   *pubsub.PubSub
 	host *Host
 	ctx  context.Context

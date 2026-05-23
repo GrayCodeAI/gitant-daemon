@@ -12,7 +12,7 @@ import (
 
 // DHT wraps the Kademlia DHT for content routing
 type DHT struct {
-	mu   sync.RWMutex
+	_   sync.RWMutex
 	dht  *dht.IpfsDHT
 	host *Host
 	ctx  context.Context

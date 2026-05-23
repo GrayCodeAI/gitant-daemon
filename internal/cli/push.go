@@ -181,7 +181,8 @@ func collectTreeObjects(repo *git.Repository, tree *object.Tree, seen map[string
 
 	// Walk entries
 	for _, entry := range tree.Entries {
-		if entry.Mode == filemode.Regular || entry.Mode == filemode.Executable {
+		switch entry.Mode {
+		case filemode.Regular, filemode.Executable:
 			if !seen[entry.Hash.String()] {
 				seen[entry.Hash.String()] = true
 				blobObj, err := encodeObject(entry.Hash, "blob", repo)
@@ -189,7 +190,7 @@ func collectTreeObjects(repo *git.Repository, tree *object.Tree, seen map[string
 					objects = append(objects, blobObj)
 				}
 			}
-		} else if entry.Mode == filemode.Dir {
+		case filemode.Dir:
 			subtree, err := repo.TreeObject(entry.Hash)
 			if err == nil {
 				subObjs, err := collectTreeObjects(repo, subtree, seen)
