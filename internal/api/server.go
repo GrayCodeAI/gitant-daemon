@@ -146,10 +146,11 @@ func (s *Server) setupMiddleware() {
 }
 
 func (s *Server) setupRoutes() {
-	// Health, status, and metrics (public)
+	// Health, status, metrics, and API docs (public)
 	s.router.Get("/health", s.handleHealth)
 	s.router.Get("/api/v1/status", s.handleStatus)
 	s.router.Handle("/metrics", promhttp.Handler())
+	s.router.Get("/api/v1/openapi.json", handleOpenAPI)
 
 	// Repository endpoints
 	s.router.Route("/api/v1/repos", func(r chi.Router) {

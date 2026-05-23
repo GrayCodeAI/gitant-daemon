@@ -3,11 +3,14 @@ package network
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -115,7 +118,28 @@ func (h *Host) Close() error {
 	return h.host.Close()
 }
 
-// startMDNS starts mDNS discovery
+// discoveryNotifee handles mDNS peer discovery events
+type discoveryNotifee struct {
+	h host.Host
+}
+
+// HandlePeerFound is called when a peer is discovered via mDNS
+func (n *discoveryNotifee) HandlePeerFound(pi peer.AddrInfo) {
+	slog.Info("mDNS peer discovered", "peer", pi.ID.String(), "addrs", pi.Addrs)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := n.h.Connect(ctx, pi); err != nil {
+		slog.Warn("failed to connect to mDNS peer", "peer", pi.ID.String(), "error", err)
+	}
+}
+
+// startMDNS starts mDNS discovery for local network peers
 func (h *Host) startMDNS() {
-	// TODO: Implement mDNS discovery
+	notifee := &discoveryNotifee{h: h.host}
+	service := mdns.NewMdnsService(h.host, "gitant", notifee)
+	if err := service.Start(); err != nil {
+		slog.Error("mDNS service failed to start", "error", err)
+		return
+	}
+	slog.Info("mDNS discovery started")
 }

@@ -1,4 +1,4 @@
-.PHONY: build test lint clean install docker run vet fmt
+.PHONY: build test lint clean install docker run vet fmt release
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -53,6 +53,10 @@ docker-compose:
 ## run: Build and start the daemon
 run: build
 	./bin/gitant serve
+
+## release: Create a release (requires tag)
+release:
+	goreleaser release --snapshot --clean
 
 ## all: Run all checks (fmt, vet, lint, test)
 all: fmt vet lint test

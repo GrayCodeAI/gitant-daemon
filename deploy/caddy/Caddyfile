@@ -1,0 +1,77 @@
+# gitant reverse proxy configuration with automatic HTTPS
+# Place at /etc/caddy/Caddyfile
+
+git.example.com {
+    # Automatic HTTPS via Let's Encrypt
+
+    # Security headers
+    header {
+        X-Frame-Options DENY
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        -Server
+    }
+
+    # Request size limit
+    request_body {
+        max_size 50MB
+    }
+
+    # Rate limiting
+    rate_limit {
+        zone gitant_api {
+            key {remote_host}
+            events 30
+            window 1s
+        }
+    }
+
+    # API endpoints
+    handle /api/* {
+        reverse_proxy localhost:7777 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            transport http {
+                read_timeout 60s
+                write_timeout 60s
+            }
+        }
+    }
+
+    # Git smart HTTP (larger bodies, longer timeouts)
+    handle_path /api/v1/repos/*/receive-pack {
+        reverse_proxy localhost:7777 {
+            transport http {
+                read_timeout 300s
+                write_timeout 300s
+            }
+        }
+    }
+
+    # Health check
+    handle /health {
+        reverse_proxy localhost:7777
+    }
+
+    # Metrics (restrict to internal)
+    handle /metrics {
+        @internal {
+            remote_ip 127.0.0.1/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+        }
+        respond @internal {
+            reverse_proxy localhost:7777
+        }
+        respond 403
+    }
+
+    # Everything else
+    handle {
+        reverse_proxy localhost:7777 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+}

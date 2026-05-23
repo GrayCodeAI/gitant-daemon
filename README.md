@@ -19,10 +19,17 @@ Your node is running at `http://localhost:7777`.
 Requires Go 1.26+.
 
 ```bash
-go build -o gitant ./cmd/gitant/
-go build -o git-remote-gitant ./cmd/git-remote-gitant/
+make build
+make run
+```
 
-./gitant serve
+Or manually:
+
+```bash
+go build -o bin/gitant ./cmd/gitant/
+go build -o bin/git-remote-gitant ./cmd/git-remote-gitant/
+
+./bin/gitant serve
 ```
 
 ### First repo
@@ -36,10 +43,10 @@ curl -X POST http://localhost:7777/api/v1/repos \
 # Init locally and push
 mkdir my-project && cd my-project
 git init && git add . && git commit -m "init"
-./gitant push --remote http://localhost:7777 --repo my-project
+./bin/gitant push --remote http://localhost:7777 --repo my-project
 
 # Clone elsewhere
-./gitant clone my-project --remote http://localhost:7777 ./my-project-clone
+./bin/gitant clone my-project --remote http://localhost:7777 ./my-project-clone
 ```
 
 ## Architecture
@@ -47,24 +54,28 @@ git init && git add . && git commit -m "init"
 ```
 gitant-daemon (Go)
 ├── HTTP API (go-chi)     REST endpoints for repos, issues, PRs, files, commits
-├── P2P Networking         libp2p (DHT + GossipSub)
+├── P2P Networking         libp2p (DHT + GossipSub + mDNS)
 ├── Identity               DID:key (Ed25519) + UCAN tokens + HTTP Signatures (RFC 9421)
 ├── Storage                go-git + file-per-block content-addressed blockstore
-└── CRDT                   Issues and PRs with Lamport clocks
+├── CRDT                   Issues and PRs with Lamport clocks
+├── Observability          slog structured logging + Prometheus /metrics
+└── Security               Rate limiting, input validation, TLS support
 
-gitant-mcp (TypeScript)    MCP server for AI agent integration (51 tools)
-gitant-web (Next.js)       Web frontend (18 routes, paginated)
+gitant-mcp (TypeScript)    MCP server for AI agent integration (52 tools)
+gitant-web (Next.js)       Web frontend (18 routes, paginated, responsive)
 ```
 
 ## CLI Reference
 
 | Command | Description |
 |---------|-------------|
-| `gitant serve` | Start the daemon |
+| `gitant serve [--port P] [--data-dir D] [--tls-cert F] [--tls-key F]` | Start the daemon |
 | `gitant init` | Initialize a local repo |
 | `gitant push --repo <id> --remote <url>` | Push to daemon (packfile) |
 | `gitant pull --repo <id> --remote <url>` | Pull from daemon |
 | `gitant clone <repo-id> [dir] --remote <url>` | Clone from daemon |
+| `gitant backup -o <dir>` | Backup data directory |
+| `gitant restore -i <dir>` | Restore from backup |
 | `gitant issue list --repo <id>` | List issues |
 | `gitant issue create --repo <id> --title <t>` | Create issue |
 | `gitant issue close --repo <id> <id>` | Close issue |
@@ -80,14 +91,20 @@ gitant-web (Next.js)       Web frontend (18 routes, paginated)
 
 ## API
 
-All endpoints are under `/api/v1/`. See [docs/api.md](docs/api.md) for full reference.
+All endpoints are under `/api/v1/`. OpenAPI spec available at `/api/v1/openapi.json`.
 
 ```bash
-# Health check
+# Health check (with dependency status)
 curl http://localhost:7777/health
 
-# Status
+# Status (version, uptime, repo count, identity)
 curl http://localhost:7777/api/v1/status
+
+# Prometheus metrics
+curl http://localhost:7777/metrics
+
+# OpenAPI spec
+curl http://localhost:7777/api/v1/openapi.json
 
 # List repos (paginated)
 curl http://localhost:7777/api/v1/repos?offset=0&limit=20
@@ -122,14 +139,93 @@ GET endpoints are public (no auth required).
 | Env Variable | Default | Description |
 |-------------|---------|-------------|
 | `GITANT_PORT` | `7777` | HTTP port |
-| `GITANT_DAEMON_URL` | `http://localhost:7777` | Daemon URL (for CLI) |
+| `GITANT_DAEMON_URL` | `http://localhost:7777` | Daemon URL (for CLI/MCP) |
+| `GITANT_UCAN_TOKEN` | (none) | UCAN token (for MCP server) |
+| `GITANT_CORS_ORIGINS` | `http://localhost:3303` | Comma-separated CORS origins |
+
+### TLS
+
+```bash
+# With TLS certificates
+./bin/gitant serve --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
+
+# Behind reverse proxy (no TLS flags needed)
+./bin/gitant serve --port 7777
+```
+
+## Production Deployment
+
+### Docker Compose (simple)
+
+```bash
+docker compose up -d
+```
+
+### With nginx reverse proxy
+
+```bash
+# Copy nginx config
+sudo cp deploy/nginx/gitant.conf /etc/nginx/sites-available/
+sudo ln -s /etc/nginx/sites-available/gitant.conf /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### With Caddy (auto HTTPS)
+
+```bash
+sudo cp deploy/caddy/Caddyfile /etc/caddy/
+sudo systemctl reload caddy
+```
+
+### Backup & Restore
+
+```bash
+# Create backup
+./bin/gitant backup -o /backups
+
+# Restore (won't overwrite existing files)
+./bin/gitant restore -i /backups/gitant-backup-20260522-143000
+```
+
+## Monitoring
+
+### Prometheus
+
+The `/metrics` endpoint exports:
+- `gitant_http_requests_total` — request count by method/path/status
+- `gitant_http_request_duration_seconds` — latency histogram
+- Standard Go runtime metrics
+
+### Grafana
+
+Import the dashboard from `deploy/grafana/gitant-dashboard.json` into Grafana. Panels include request rate, latency percentiles, error rate, goroutines, and memory usage.
+
+### Health Check
+
+```bash
+curl http://localhost:7777/health
+# Returns: {"status":"healthy","checks":{"identity":"ok","storage":"ok"}}
+```
+
+Returns 503 with `{"status":"degraded"}` if dependencies are unhealthy.
 
 ## Development
 
 ```bash
-go test ./...
-go vet ./...
-go build ./...
+# Build
+make build
+
+# Run tests with race detector
+make test
+
+# Lint
+make lint
+
+# All checks
+make all
+
+# Load tests (requires k6)
+k6 run -e GITANT_URL=http://localhost:7777 test/load/api-test.js
 ```
 
 ## License
