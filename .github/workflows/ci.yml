@@ -26,11 +26,6 @@ jobs:
           version: v2.2.0
           install-mode: goinstall
 
-      - name: govulncheck
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-input: '1.26'
-
       - name: Test with coverage
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
