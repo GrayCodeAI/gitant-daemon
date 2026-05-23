@@ -33,7 +33,7 @@ func InfoRefs(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		refs, err := repo.ListAllRefs()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "failed to list refs", http.StatusInternalServerError)
 			return
 		}
 
@@ -65,7 +65,7 @@ func GitUploadPack(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		}
 
 		// Read the request body (pkt-line format)
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
 		if err != nil {
 			http.Error(w, "reading body", http.StatusBadRequest)
 			return
@@ -121,7 +121,7 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 		}
 
 		// Read the request body
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
 		if err != nil {
 			http.Error(w, "reading body", http.StatusBadRequest)
 			return
@@ -154,10 +154,13 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 			}
 			protection := protectionStore.Get(id, branch)
 			if protection != nil && protection.NoForcePush {
-				// Check if this is a non-fast-forward update
-				// For now, we allow the push but log a warning
-				// Full force-push detection requires checking the current ref hash
-				log.Printf("branch %s is protected (no-force-push), push from %s", branch, r.RemoteAddr)
+				if update.OldHash != "" && update.OldHash != "0000000000000000000000000000000000000000" {
+					currentRef, err := repo.GetBranch(branch)
+					if err == nil && currentRef.String() != update.OldHash {
+						http.Error(w, "force push rejected: branch '"+branch+"' is protected", http.StatusForbidden)
+						return
+					}
+				}
 			}
 		}
 

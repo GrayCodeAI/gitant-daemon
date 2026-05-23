@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/lakshmanpatel/gitant/internal/api/handlers"
 	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
@@ -18,6 +21,32 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
+
+// version is set via ldflags at build time.
+var version = "dev"
+
+// Prometheus metrics.
+var (
+	httpRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gitant_http_requests_total",
+			Help: "Total HTTP requests by method, path, and status.",
+		},
+		[]string{"method", "path", "status"},
+	)
+	httpRequestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "gitant_http_request_duration_seconds",
+			Help:    "HTTP request duration in seconds.",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"method", "path"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(httpRequestsTotal, httpRequestDuration)
+}
 
 type Server struct {
 	router      *chi.Mux
@@ -32,11 +61,14 @@ type Server struct {
 	webhooks    *webhooks.Manager
 	labels      *crdt.LabelStore
 	tasks       *crdt.TaskStore
+	releases    *crdt.ReleaseStore
 	protection  *storage.ProtectionStore
 	revocations *identity.RevocationStore
+	rateLimiter *authMiddleware.RateLimiter
+	startTime   time.Time
 }
 
-func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string) *Server {
+func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string) *Server {
 	s := &Server{
 		router:      chi.NewRouter(),
 		port:        port,
@@ -51,6 +83,8 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 		tasks:       tasks,
 		protection:  protection,
 		revocations: revocations,
+		rateLimiter: authMiddleware.NewRateLimiter(100), // 100 req/min
+		startTime:   time.Now(),
 	}
 
 	s.setupMiddleware()
@@ -59,9 +93,45 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 	return s
 }
 
+func requestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		reqID := r.Header.Get("X-Request-ID")
+		if reqID == "" {
+			reqID = uuid.New().String()[:8]
+		}
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+
+		duration := time.Since(start)
+		statusStr := fmt.Sprintf("%d", ww.Status())
+		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, statusStr).Inc()
+		httpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration.Seconds())
+
+		slog.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", ww.Status(),
+			"duration_ms", duration.Milliseconds(),
+			"request_id", reqID,
+			"remote", r.RemoteAddr,
+		)
+	})
+}
+
+func bodySizeLimit(maxBytes int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func (s *Server) setupMiddleware() {
-	s.router.Use(middleware.Logger)
+	s.router.Use(requestLogger)
 	s.router.Use(middleware.Recoverer)
+	s.router.Use(bodySizeLimit(10 << 20))
 	s.router.Use(middleware.RequestID)
 	s.router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3303", "https://*.gitant.dev"},
@@ -72,12 +142,14 @@ func (s *Server) setupMiddleware() {
 		MaxAge:           300,
 	}))
 	s.router.Use(authMiddleware.NewHTTPSignatureMiddleware(s.revocations, s.identity.DID))
+	s.router.Use(s.rateLimiter.Middleware)
 }
 
 func (s *Server) setupRoutes() {
-	// Health and status (public)
+	// Health, status, and metrics (public)
 	s.router.Get("/health", s.handleHealth)
 	s.router.Get("/api/v1/status", s.handleStatus)
+	s.router.Handle("/metrics", promhttp.Handler())
 
 	// Repository endpoints
 	s.router.Route("/api/v1/repos", func(r chi.Router) {
@@ -172,23 +244,47 @@ func (s *Server) setupRoutes() {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	checks := map[string]string{
+		"identity": "ok",
+		"storage":  "ok",
+	}
+	status := "healthy"
+	code := http.StatusOK
+
+	if s.identity == nil {
+		checks["identity"] = "missing"
+		status = "degraded"
+		code = http.StatusServiceUnavailable
+	}
+
+	if s.repos == nil {
+		checks["storage"] = "missing"
+		status = "degraded"
+		code = http.StatusServiceUnavailable
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": status,
+		"checks": checks,
+	})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"version": "0.1.0",
-		"peers":   0,
-		"repos":   len(s.repos.List()),
-		"agents":  1,
-		"uptime":  0,
+		"version":  version,
+		"peers":    0,
+		"repos":    len(s.repos.List()),
+		"agents":   1,
+		"uptime":   time.Since(s.startTime).String(),
 		"identity": s.identity.DID,
 	})
 }
 
-func (s *Server) Start() error {
+// Start starts the HTTP(S) server. If tlsCert and tlsKey are non-empty, TLS is used.
+func (s *Server) Start(tlsCert, tlsKey string) error {
 	addr := fmt.Sprintf(":%d", s.port)
 	s.httpServer = &http.Server{
 		Addr:         addr,
@@ -197,21 +293,29 @@ func (s *Server) Start() error {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
-	fmt.Printf("gitant daemon listening on %s\n", addr)
-	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("listen error: %w", err)
+
+	if tlsCert != "" && tlsKey != "" {
+		slog.Info("gitant daemon listening (TLS)", "addr", addr)
+		if err := s.httpServer.ListenAndServeTLS(tlsCert, tlsKey); err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("listen error: %w", err)
+		}
+	} else {
+		slog.Info("gitant daemon listening", "addr", addr, "tls", false)
+		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("listen error: %w", err)
+		}
 	}
 	return nil
 }
 
 // Shutdown gracefully stops the HTTP server and persists all stores to disk.
 func (s *Server) Shutdown(ctx context.Context) error {
-	fmt.Println("Shutting down gitant daemon...")
+	slog.Info("shutting down gitant daemon")
 
 	// Stop accepting new connections; wait for in-flight requests to finish.
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "HTTP shutdown error: %v\n", err)
+			slog.Error("HTTP shutdown error", "error", err)
 		}
 	}
 
@@ -219,7 +323,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	var firstErr error
 	save := func(name string, fn func() error) {
 		if err := fn(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error saving %s: %v\n", name, err)
+			slog.Error("error saving store", "store", name, "error", err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -230,10 +334,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	save("blockstore", s.blockstore.Save)
 	save("labels", s.labels.Save)
 	save("tasks", s.tasks.Save)
+	save("releases", s.releases.Save)
 	save("protections", s.protection.Save)
 	save("webhooks", s.webhooks.Save)
 	save("revocations", s.revocations.Save)
 
-	fmt.Println("Shutdown complete.")
+	slog.Info("shutdown complete")
 	return firstErr
 }

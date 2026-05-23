@@ -1,6 +1,7 @@
-# Compiled binaries
-gitant
-git-remote-gitant
+# Compiled binaries (root-level only)
+/bin/
+/gitant
+/git-remote-gitant
 
 # Build artifacts
 .next/

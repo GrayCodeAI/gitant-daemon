@@ -48,14 +48,14 @@ func TestDispatchMatchesWildcards(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
-		// Verify HMAC header is present
+		// Verify HMAC signature header is present (raw secret is no longer sent)
 		sig := r.Header.Get("X-Gitant-Signature-256")
 		if sig == "" {
 			t.Error("expected X-Gitant-Signature-256 header")
 		}
-		secret := r.Header.Get("X-Gitant-Secret")
-		if secret != "test-secret" {
-			t.Errorf("expected X-Gitant-Secret header, got %q", secret)
+		// Verify X-Gitant-Secret header is NOT sent (security fix)
+		if raw := r.Header.Get("X-Gitant-Secret"); raw != "" {
+			t.Errorf("X-Gitant-Secret should NOT be sent in transit, got %q", raw)
 		}
 	}))
 	defer ts.Close()

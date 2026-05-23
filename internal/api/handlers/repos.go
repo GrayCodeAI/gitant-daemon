@@ -32,9 +32,18 @@ func CreateRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http
 			return
 		}
 
+		if !ValidateID(req.Name) {
+			http.Error(w, "Invalid repository name: must be alphanumeric with hyphens/dots/underscores, max 64 chars", http.StatusBadRequest)
+			return
+		}
+		if len(req.Description) > 10000 {
+			http.Error(w, "Description too long (max 10000 characters)", http.StatusBadRequest)
+			return
+		}
+
 		entry, err := registry.Create(req.Name, req.Name, req.Description, req.Private)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
+			http.Error(w, SanitizeError(err, "failed to create repository"), http.StatusConflict)
 			return
 		}
 
@@ -96,7 +105,7 @@ func GetRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		entry, err := registry.GetEntry(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
@@ -118,9 +127,9 @@ func DeleteRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http
 
 		if err := registry.Delete(id); err != nil {
 			if strings.Contains(err.Error(), "not found") {
-				http.Error(w, err.Error(), http.StatusNotFound)
+				http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			} else {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				http.Error(w, SanitizeError(err, "failed to delete repository"), http.StatusInternalServerError)
 			}
 			return
 		}
@@ -148,7 +157,7 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 
 		repo, err := registry.Open(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
@@ -174,16 +183,21 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 		// Check branch protection rules before allowing ref updates
 		for _, update := range req.RefUpdates {
 			branch := update.Name
-			// Strip refs/heads/ prefix if present
 			if len(branch) > 11 && branch[:11] == "refs/heads/" {
 				branch = branch[11:]
 			}
 			protection := protectionStore.Get(id, branch)
 			if protection != nil {
-				// Check no-force-push: reject if old hash is zero (force push / new branch creation on protected)
-				if protection.NoForcePush && (update.OldHash == "0000000000000000000000000000000000000000" || update.OldHash == "") {
-					// Allow new branch creation, but block force pushes (where old hash is set but doesn't match)
-					// A true force push detection requires checking if oldHash matches current ref
+				if protection.NoForcePush {
+					// Check if this is a force push (old hash doesn't match current ref)
+					if update.OldHash != "" && update.OldHash != "0000000000000000000000000000000000000000" {
+						// Verify old hash matches current ref to detect force push
+						currentRef, err := repo.GetBranch(branch)
+						if err == nil && currentRef.String() != update.OldHash {
+							http.Error(w, "force push rejected: branch '"+branch+"' is protected", http.StatusForbidden)
+							return
+						}
+					}
 				}
 			}
 		}
@@ -261,7 +275,7 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 
 		repo, err := registry.Open(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
@@ -287,7 +301,13 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 			}
 			protection := protectionStore.Get(id, branch)
 			if protection != nil && protection.NoForcePush {
-				// Log warning but allow
+				if update.OldHash != "" && update.OldHash != "0000000000000000000000000000000000000000" {
+					currentRef, err := repo.GetBranch(branch)
+					if err == nil && currentRef.String() != update.OldHash {
+						http.Error(w, "force push rejected: branch '"+branch+"' is protected", http.StatusForbidden)
+						return
+					}
+				}
 			}
 		}
 
@@ -360,19 +380,19 @@ func CloneRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		entry, err := registry.GetEntry(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
 		repo, err := registry.Open(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, SanitizeError(err, "failed to open repository"), http.StatusInternalServerError)
 			return
 		}
 
 		refs, err := repo.ListAllRefs()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, SanitizeError(err, "failed to list refs"), http.StatusInternalServerError)
 			return
 		}
 
@@ -393,14 +413,14 @@ func GetObject(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		repo, err := registry.Open(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
 		hash := plumbing.NewHash(hashStr)
 		objType, content, err := repo.GetObject(hash)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "object not found"), http.StatusNotFound)
 			return
 		}
 
@@ -422,13 +442,13 @@ func ListRefs(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		repo, err := registry.Open(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
 		refs, err := repo.ListAllRefs()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, SanitizeError(err, "failed to list refs"), http.StatusInternalServerError)
 			return
 		}
 
@@ -463,14 +483,19 @@ func ForkRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http.H
 			return
 		}
 
+		if !ValidateID(req.Name) {
+			http.Error(w, "Invalid fork name: must be alphanumeric with hyphens/dots/underscores, max 64 chars", http.StatusBadRequest)
+			return
+		}
+
 		entry, err := registry.Fork(sourceID, req.Name, "anonymous")
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
-				http.Error(w, err.Error(), http.StatusNotFound)
+				http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			} else if strings.Contains(err.Error(), "already exists") {
-				http.Error(w, err.Error(), http.StatusConflict)
+				http.Error(w, SanitizeError(err, "repository already exists"), http.StatusConflict)
 			} else {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				http.Error(w, SanitizeError(err, "failed to fork repository"), http.StatusInternalServerError)
 			}
 			return
 		}
@@ -514,13 +539,13 @@ func CreateBranch(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		repo, err := registry.Open(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
 		hash := plumbing.NewHash(req.Commit)
 		if err := repo.CreateBranch(req.Name, hash); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, SanitizeError(err, "failed to create branch"), http.StatusInternalServerError)
 			return
 		}
 

@@ -1,9 +1,9 @@
 package crdt
 
 import (
+	crypto_rand "crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"sort"
 	"time"
 )
@@ -308,5 +308,7 @@ func (i *Issue) applyOperations(ops []*Operation) {
 }
 
 func generateID() string {
-	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Int63())
+	b := make([]byte, 8)
+	_, _ = crypto_rand.Read(b)
+	return fmt.Sprintf("%d-%x", time.Now().UnixNano(), b)
 }

@@ -31,6 +31,24 @@ func CreateIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc 
 			http.Error(w, "Title is required", http.StatusBadRequest)
 			return
 		}
+		if len(req.Title) > 256 {
+			http.Error(w, "Title must be 256 characters or less", http.StatusBadRequest)
+			return
+		}
+		if len(req.Body) > 65536 {
+			http.Error(w, "Body must be 65536 characters or less", http.StatusBadRequest)
+			return
+		}
+		if len(req.Labels) > 20 {
+			http.Error(w, "Maximum 20 labels allowed", http.StatusBadRequest)
+			return
+		}
+		for _, label := range req.Labels {
+			if len(label) > 64 {
+				http.Error(w, "Each label must be 64 characters or less", http.StatusBadRequest)
+				return
+			}
+		}
 
 		// Get author from context (set by auth middleware)
 		author := "anonymous"
@@ -145,6 +163,11 @@ func CommentIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if len(req.Body) > 65536 {
+			http.Error(w, "Body must be 65536 characters or less", http.StatusBadRequest)
 			return
 		}
 

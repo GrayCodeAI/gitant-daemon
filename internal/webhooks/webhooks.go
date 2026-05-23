@@ -8,7 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -128,13 +128,13 @@ func (m *Manager) matches(wh *Webhook, eventType EventType) bool {
 func (m *Manager) send(wh *Webhook, event Event) {
 	body, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("webhook: marshal error: %v", err)
+		slog.Error("webhook marshal error", "error", err)
 		return
 	}
 
 	req, err := http.NewRequest("POST", wh.URL, bytes.NewReader(body))
 	if err != nil {
-		log.Printf("webhook: request error: %v", err)
+		slog.Error("webhook request error", "error", err)
 		return
 	}
 
@@ -142,20 +142,19 @@ func (m *Manager) send(wh *Webhook, event Event) {
 	req.Header.Set("X-Gitant-Event", string(event.Type))
 	req.Header.Set("X-Gitant-Delivery", fmt.Sprintf("%d", time.Now().UnixNano()))
 	if wh.Secret != "" {
-		req.Header.Set("X-Gitant-Secret", wh.Secret)
 		sig := HMACSHA256(body, wh.Secret)
 		req.Header.Set("X-Gitant-Signature-256", "sha256="+hex.EncodeToString(sig))
 	}
 
 	resp, err := m.client.Do(req)
 	if err != nil {
-		log.Printf("webhook: delivery error to %s: %v", wh.URL, err)
+		slog.Error("webhook delivery error", "url", wh.URL, "error", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		log.Printf("webhook: %s returned %d", wh.URL, resp.StatusCode)
+		slog.Warn("webhook returned error status", "url", wh.URL, "status", resp.StatusCode)
 	}
 }
 

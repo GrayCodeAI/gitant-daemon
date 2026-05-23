@@ -38,8 +38,17 @@ func (s *IssueStore) Save() error {
 		return nil
 	}
 	s.mu.RLock()
-	data := s.issues
-	s.mu.RUnlock()
+	defer s.mu.RUnlock()
+	// Deep copy to avoid race with concurrent mutations
+	data := make(map[string]map[string]*Issue, len(s.issues))
+	for repoID, repoIssues := range s.issues {
+		repoCopy := make(map[string]*Issue, len(repoIssues))
+		for k, v := range repoIssues {
+			issueCopy := *v
+			repoCopy[k] = &issueCopy
+		}
+		data[repoID] = repoCopy
+	}
 	return persistence.SaveJSON(s.path, data)
 }
 

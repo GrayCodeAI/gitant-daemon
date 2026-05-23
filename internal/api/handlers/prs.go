@@ -32,6 +32,22 @@ func OpenPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFunc
 			http.Error(w, "Title is required", http.StatusBadRequest)
 			return
 		}
+		if len(req.Title) > 256 {
+			http.Error(w, "Title must be 256 characters or less", http.StatusBadRequest)
+			return
+		}
+		if len(req.Body) > 65536 {
+			http.Error(w, "Body must be 65536 characters or less", http.StatusBadRequest)
+			return
+		}
+		if len(req.SourceBranch) > 256 {
+			http.Error(w, "Source branch must be 256 characters or less", http.StatusBadRequest)
+			return
+		}
+		if len(req.TargetBranch) > 256 {
+			http.Error(w, "Target branch must be 256 characters or less", http.StatusBadRequest)
+			return
+		}
 
 		author := "anonymous"
 		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
@@ -149,6 +165,16 @@ func ReviewPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFu
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		validVerdicts := map[string]bool{"approve": true, "request_changes": true, "comment": true}
+		if !validVerdicts[req.Verdict] {
+			http.Error(w, "Verdict must be one of: approve, request_changes, comment", http.StatusBadRequest)
+			return
+		}
+		if len(req.Body) > 65536 {
+			http.Error(w, "Body must be 65536 characters or less", http.StatusBadRequest)
 			return
 		}
 

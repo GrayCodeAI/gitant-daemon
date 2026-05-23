@@ -34,7 +34,7 @@ func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, serverDID
 				token := strings.TrimPrefix(auth, "Bearer ")
 				ucan, err := identity.VerifySignedUCANWithChain(token, revocations)
 				if err != nil {
-					http.Error(w, "Invalid UCAN: "+err.Error(), http.StatusUnauthorized)
+					http.Error(w, "Invalid or expired authentication token", http.StatusUnauthorized)
 					return
 				}
 
@@ -58,7 +58,7 @@ func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, serverDID
 
 			params, err := parseSignatureParams(auth)
 			if err != nil {
-				http.Error(w, "Invalid signature params: "+err.Error(), http.StatusBadRequest)
+				http.Error(w, "Invalid signature parameters", http.StatusBadRequest)
 				return
 			}
 
@@ -82,13 +82,13 @@ func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, serverDID
 
 			signingString, err := buildSigningString(r, params)
 			if err != nil {
-				http.Error(w, "Failed to build signing string: "+err.Error(), http.StatusBadRequest)
+				http.Error(w, "Invalid signature", http.StatusBadRequest)
 				return
 			}
 
 			pubKey, err := extractPublicKey(keyId)
 			if err != nil {
-				http.Error(w, "Failed to extract public key: "+err.Error(), http.StatusBadRequest)
+				http.Error(w, "Invalid authentication key", http.StatusBadRequest)
 				return
 			}
 
