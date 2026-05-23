@@ -24,6 +24,7 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.2.0
+          install-mode: goinstall
 
       - name: govulncheck
         uses: golang/govulncheck-action@v1
