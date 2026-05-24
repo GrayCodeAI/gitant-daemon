@@ -11,6 +11,7 @@ RUN apk add --no-cache git ca-certificates && \
     adduser -D -u 1000 gitant
 COPY --from=builder /gitant /usr/local/bin/
 COPY --from=builder /git-remote-gitant /usr/local/bin/
+RUN mkdir -p /home/gitant/.gitant && chown -R gitant:gitant /home/gitant
 USER gitant
 WORKDIR /home/gitant
 EXPOSE 7777
