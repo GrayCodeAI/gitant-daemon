@@ -81,6 +81,7 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 		webhooks:    webhookMgr,
 		labels:      labels,
 		tasks:       tasks,
+		releases:    releases,
 		protection:  protection,
 		revocations: revocations,
 		rateLimiter: authMiddleware.NewRateLimiter(100), // 100 req/min
@@ -178,6 +179,8 @@ func (s *Server) setupRoutes() {
 		r.Get("/{id}/protections", handlers.ListProtections(s.protection))
 		r.Get("/{id}/protections/{branch}", handlers.GetProtection(s.protection))
 		r.Get("/{id}/tasks", handlers.ListTasks(s.tasks))
+		r.Get("/{id}/releases", handlers.ListReleases(s.releases))
+		r.Get("/{id}/releases/{releaseId}", handlers.GetRelease(s.releases))
 
 		// Authenticated mutating endpoints
 		r.Group(func(r chi.Router) {
@@ -205,6 +208,8 @@ func (s *Server) setupRoutes() {
 			r.Post("/{id}/tasks", handlers.CreateTask(s.tasks))
 			r.Post("/{id}/tasks/{taskId}/claim", handlers.ClaimTask(s.tasks))
 			r.Post("/{id}/tasks/{taskId}/complete", handlers.CompleteTask(s.tasks))
+			r.Post("/{id}/releases", handlers.CreateRelease(s.releases, s.webhooks))
+			r.Delete("/{id}/releases/{releaseId}", handlers.DeleteRelease(s.releases, s.webhooks))
 		})
 	})
 
