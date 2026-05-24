@@ -29,6 +29,16 @@ func RegisterWebhook(manager *webhooks.Manager) http.HandlerFunc {
 			return
 		}
 
+		if err := webhooks.ValidateWebhookURL(req.URL); err != nil {
+			http.Error(w, fmt.Sprintf("Invalid webhook URL: %s", err), http.StatusBadRequest)
+			return
+		}
+
+		if err := webhooks.ValidateWebhookURL(req.URL); err != nil {
+			http.Error(w, fmt.Sprintf("Invalid webhook URL: %s", err), http.StatusBadRequest)
+			return
+		}
+
 		if len(req.Events) == 0 {
 			req.Events = []webhooks.EventType{"*"}
 		}
@@ -42,13 +52,27 @@ func RegisterWebhook(manager *webhooks.Manager) http.HandlerFunc {
 	}
 }
 
-// ListWebhooks lists all registered webhooks
+// ListWebhooks lists all registered webhooks (secrets masked)
 func ListWebhooks(manager *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		offset, limit := ParsePagination(r)
 		whs := manager.List()
 
-		paged, total := PaginateSlice(whs, offset, limit)
+		// Mask secrets before sending to client
+		masked := make([]map[string]interface{}, len(whs))
+		for i, wh := range whs {
+			entry := map[string]interface{}{
+				"id":     wh.ID,
+				"url":    wh.URL,
+				"events": wh.Events,
+			}
+			if wh.Secret != "" {
+				entry["secret"] = "***"
+			}
+			masked[i] = entry
+		}
+
+		paged, total := PaginateSlice(masked, offset, limit)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{

@@ -65,10 +65,11 @@ type Server struct {
 	protection  *storage.ProtectionStore
 	revocations *identity.RevocationStore
 	rateLimiter *authMiddleware.RateLimiter
+	corsOrigins []string
 	startTime   time.Time
 }
 
-func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string) *Server {
+func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string, corsOrigins []string) *Server {
 	s := &Server{
 		router:      chi.NewRouter(),
 		port:        port,
@@ -85,11 +86,17 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 		protection:  protection,
 		revocations: revocations,
 		rateLimiter: authMiddleware.NewRateLimiter(100), // 100 req/min
+		corsOrigins: corsOrigins,
 		startTime:   time.Now(),
 	}
 
 	s.setupMiddleware()
 	s.setupRoutes()
+
+	// Load persisted agent registry
+	if err := s.agents.Load(); err != nil {
+		slog.Warn("failed to load agent registry", "error", err)
+	}
 
 	return s
 }
@@ -134,14 +141,19 @@ func (s *Server) setupMiddleware() {
 	s.router.Use(middleware.Recoverer)
 	s.router.Use(bodySizeLimit(10 << 20))
 	s.router.Use(middleware.RequestID)
+	origins := s.corsOrigins
+	if len(origins) == 0 {
+		origins = []string{"http://localhost:3303", "https://*.gitant.dev"}
+	}
 	s.router.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3303", "https://*.gitant.dev"},
+		AllowedOrigins:   origins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Requested-With"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+	s.router.Use(authMiddleware.SecurityHeaders)
 	s.router.Use(authMiddleware.NewHTTPSignatureMiddleware(s.revocations, s.identity.DID))
 	s.router.Use(s.rateLimiter.Middleware)
 }
@@ -199,7 +211,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/{id}/issues/{issueId}/close", handlers.CloseIssue(s.issues, s.webhooks))
 			r.Post("/{id}/prs", handlers.OpenPR(s.prs, s.webhooks))
 			r.Post("/{id}/prs/{prId}/review", handlers.ReviewPR(s.prs, s.webhooks))
-			r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs, s.webhooks))
+			r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs, s.protection, s.webhooks))
 			r.Post("/{id}/branches", handlers.CreateBranch(s.repos))
 			r.Post("/{id}/labels", handlers.CreateLabel(s.labels))
 			r.Delete("/{id}/labels/{name}", handlers.DeleteLabel(s.labels))
@@ -344,6 +356,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	save("protections", s.protection.Save)
 	save("webhooks", s.webhooks.Save)
 	save("revocations", s.revocations.Save)
+	save("agents", s.agents.Save)
 
 	slog.Info("shutdown complete")
 	return firstErr

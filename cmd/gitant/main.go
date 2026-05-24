@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -136,8 +137,18 @@ var serveCmd = &cobra.Command{
 			slog.Warn("failed to load revocations", "error", err)
 		}
 
+		// Parse CORS origins from environment
+		var corsOrigins []string
+		if envOrigins := os.Getenv("GITANT_CORS_ORIGINS"); envOrigins != "" {
+			for _, o := range strings.Split(envOrigins, ",") {
+				if trimmed := strings.TrimSpace(o); trimmed != "" {
+					corsOrigins = append(corsOrigins, trimmed)
+				}
+			}
+		}
+
 		// Create server
-		server := api.NewServer(port, id, repos, issueStore, prStore, blockstore, labelStore, taskStore, releaseStore, protectionStore, webhookManager, revocationStore, dataStoreDir)
+		server := api.NewServer(port, id, repos, issueStore, prStore, blockstore, labelStore, taskStore, releaseStore, protectionStore, webhookManager, revocationStore, dataStoreDir, corsOrigins)
 
 		tlsCert, _ := cmd.Flags().GetString("tls-cert")
 		tlsKey, _ := cmd.Flags().GetString("tls-key")

@@ -162,6 +162,7 @@ func init() {
 		c.MarkFlagRequired("repo")
 		c.Flags().String("daemon-url", "", "Daemon URL (default: http://localhost:7777)")
 	}
+	prListCmd.Flags().String("status", "", "Filter by status (open|closed|merged)")
 	prCreateCmd.Flags().StringP("title", "t", "", "PR title (required)")
 	prCreateCmd.Flags().StringP("body", "b", "", "PR body")
 	prCreateCmd.Flags().StringP("source", "s", "", "Source branch (required)")

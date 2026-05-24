@@ -116,7 +116,24 @@ func (s *PullRequestStore) Delete(repoID, prID string) error {
 	}
 
 	delete(repo, prID)
-	return s.Save()
+	return s.saveLocked()
+}
+
+// saveLocked persists while the caller already holds the write lock.
+func (s *PullRequestStore) saveLocked() error {
+	if s.path == "" {
+		return nil
+	}
+	data := make(map[string]map[string]*PullRequest, len(s.prs))
+	for repoID, repoPRs := range s.prs {
+		repoCopy := make(map[string]*PullRequest, len(repoPRs))
+		for k, v := range repoPRs {
+			prCopy := *v
+			repoCopy[k] = &prCopy
+		}
+		data[repoID] = repoCopy
+	}
+	return persistence.SaveJSON(s.path, data)
 }
 
 // SavePR persists after a mutation (convenience for handlers)
@@ -124,9 +141,38 @@ func (s *PullRequestStore) SavePR(repoID, prID string) error {
 	return s.Save()
 }
 
-// All returns all pull requests across all repositories
+// Update atomically gets a PR, calls fn while holding the write lock,
+// then persists. fn receives the PR and may mutate it freely.
+func (s *PullRequestStore) Update(repoID, prID string, fn func(*PullRequest) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, ok := s.prs[repoID]
+	if !ok {
+		return fmt.Errorf("repository not found: %s", repoID)
+	}
+	pr, ok := repo[prID]
+	if !ok {
+		return fmt.Errorf("pull request not found: %s", prID)
+	}
+	if err := fn(pr); err != nil {
+		return err
+	}
+	return s.saveLocked()
+}
+
+// All returns deep copies of all pull requests across all repositories
 func (s *PullRequestStore) All() map[string]map[string]*PullRequest {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.prs
+	data := make(map[string]map[string]*PullRequest, len(s.prs))
+	for repoID, repoPRs := range s.prs {
+		repoCopy := make(map[string]*PullRequest, len(repoPRs))
+		for k, v := range repoPRs {
+			prCopy := *v
+			repoCopy[k] = &prCopy
+		}
+		data[repoID] = repoCopy
+	}
+	return data
 }

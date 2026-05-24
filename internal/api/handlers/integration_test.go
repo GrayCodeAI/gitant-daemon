@@ -43,7 +43,7 @@ func setupWorkflowRouter(t *testing.T) (*chi.Mux, *storage.RepositoryRegistry, *
 	r.Get("/repos/{id}/prs", ListPRs(prStore))
 	r.Get("/repos/{id}/prs/{prId}", GetPR(prStore))
 	r.Post("/repos/{id}/prs/{prId}/review", ReviewPR(prStore, wm))
-	r.Post("/repos/{id}/prs/{prId}/merge", MergePR(prStore, wm))
+	r.Post("/repos/{id}/prs/{prId}/merge", MergePR(prStore, protectionStore, wm))
 
 	// Labels
 	r.Post("/repos/{id}/labels", CreateLabel(labelStore))

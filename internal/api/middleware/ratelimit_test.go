@@ -93,7 +93,7 @@ func TestRateLimiterSeparatesIPs(t *testing.T) {
 	}
 }
 
-func TestRateLimiterUsesXForwardedFor(t *testing.T) {
+func TestRateLimiterIgnoresXForwardedFor(t *testing.T) {
 	rl := NewRateLimiter(2)
 	defer rl.cleanup.Stop()
 
@@ -101,7 +101,7 @@ func TestRateLimiterUsesXForwardedFor(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Use up limit with X-Forwarded-For
+	// Use up limit on RemoteAddr 9.9.9.9
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.RemoteAddr = "9.9.9.9:9999"
@@ -113,14 +113,23 @@ func TestRateLimiterUsesXForwardedFor(t *testing.T) {
 		}
 	}
 
-	// Same X-Forwarded-For, different RemoteAddr — should still be blocked
+	// Same X-Forwarded-For but different RemoteAddr — should succeed (XFF is ignored)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "8.8.8.8:8888"
 	req.Header.Set("X-Forwarded-For", "3.3.3.3")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected 429, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (XFF ignored, different RemoteAddr), got %d", rec.Code)
+	}
+
+	// Same RemoteAddr as original — should be blocked
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.RemoteAddr = "9.9.9.9:9999"
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 (same RemoteAddr exhausted), got %d", rec2.Code)
 	}
 }
 

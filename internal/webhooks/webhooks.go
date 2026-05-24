@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sync"
 	"time"
@@ -64,6 +66,37 @@ func NewManager() *Manager {
 			Timeout: 10 * time.Second,
 		},
 	}
+}
+
+// ValidateWebhookURL checks that a webhook URL is safe (not targeting internal/private IPs).
+func ValidateWebhookURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL scheme must be http or https")
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("URL must have a hostname")
+	}
+
+	// Resolve hostname to IP and check for private/internal ranges
+	hostname := u.Hostname()
+	ips, err := net.LookupIP(hostname)
+	if err != nil {
+		return nil // DNS failure means the URL won't work anyway; let it fail at dispatch
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("webhook URL resolves to a private/internal IP address (%s -> %s)", hostname, ip)
+		}
+		// Block AWS metadata endpoint range
+		if ip.To4() != nil && ip.To4()[0] == 169 && ip.To4()[1] == 254 {
+			return fmt.Errorf("webhook URL resolves to link-local metadata range (%s -> %s)", hostname, ip)
+		}
+	}
+	return nil
 }
 
 // Register registers a new webhook and persists it.

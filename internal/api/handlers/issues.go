@@ -171,19 +171,19 @@ func CommentIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc
 			return
 		}
 
-		issue, err := store.Get(repoID, issueID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-
 		author := "anonymous"
 		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
 			author = did
 		}
 
-		issue.AddComment(author, req.Body)
-		_ = store.Save()
+		err := store.Update(repoID, issueID, func(issue *crdt.Issue) error {
+			issue.AddComment(author, req.Body)
+			return nil
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 
 		wm.Dispatch(webhooks.Event{
 			Type: webhooks.EventIssueCommented,
@@ -211,19 +211,19 @@ func CloseIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc {
 		repoID := chi.URLParam(r, "id")
 		issueID := chi.URLParam(r, "issueId")
 
-		issue, err := store.Get(repoID, issueID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-
 		author := "anonymous"
 		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
 			author = did
 		}
 
-		issue.SetStatus(author, crdt.StatusClosed)
-		_ = store.Save()
+		err := store.Update(repoID, issueID, func(issue *crdt.Issue) error {
+			issue.SetStatus(author, crdt.StatusClosed)
+			return nil
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 
 		wm.Dispatch(webhooks.Event{
 			Type: webhooks.EventIssueClosed,

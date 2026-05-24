@@ -42,6 +42,10 @@ func (rl *RateLimiter) cleanupLoop() {
 	}
 }
 
+func (rl *RateLimiter) Cleanup() {
+	rl.cleanup.Stop()
+}
+
 func (rl *RateLimiter) allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -68,13 +72,26 @@ func (rl *RateLimiter) allow(key string) bool {
 
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Use RemoteAddr only. X-Forwarded-For is client-controlled and trivially spoofable.
 		key := r.RemoteAddr
-		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-			key = forwarded
-		}
 		if !rl.allow(key) {
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// SecurityHeaders adds standard security headers to responses.
+func SecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "0")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		if r.TLS != nil {
+			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		}
 		next.ServeHTTP(w, r)
 	})

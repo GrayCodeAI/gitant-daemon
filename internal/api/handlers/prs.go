@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
+	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
@@ -178,22 +179,21 @@ func ReviewPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFu
 			return
 		}
 
-		pr, err := store.Get(repoID, prID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-
 		author := "anonymous"
 		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
 			author = did
 		}
 
-		// Add reviewer and comment
-		pr.AddReviewer(author, author)
 		comment := fmt.Sprintf("Review [%s]: %s", req.Verdict, req.Body)
-		pr.AddComment(author, comment)
-		_ = store.Save()
+		err := store.Update(repoID, prID, func(pr *crdt.PullRequest) error {
+			pr.AddReviewer(author, author)
+			pr.AddComment(author, comment)
+			return nil
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 
 		wm.Dispatch(webhooks.Event{
 			Type: webhooks.EventPRReviewed,
@@ -217,15 +217,45 @@ func ReviewPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFu
 }
 
 // MergePR merges a pull request
-func MergePR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFunc {
+func MergePR(store *crdt.PullRequestStore, protections *storage.ProtectionStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		prID := chi.URLParam(r, "prId")
 
+		// Get PR to check status and target branch before mutating
 		pr, err := store.Get(repoID, prID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
+		}
+		if pr.Status != crdt.StatusOpen {
+			http.Error(w, "Pull request is not open", http.StatusBadRequest)
+			return
+		}
+
+		// Check branch protection
+		if protections != nil {
+			prot := protections.Get(repoID, pr.TargetBranch)
+			if prot != nil {
+				if prot.RequireApproval {
+					hasApproval := false
+					for _, op := range pr.Log().Operations() {
+						if op.Type == crdt.OpAddComment {
+							if comment, ok := op.Data["comment"].(string); ok && len(comment) >= 7 && comment[:7] == "Review [" {
+								if len(comment) > 15 && comment[7:14] == "approve" {
+									hasApproval = true
+									break
+								}
+							}
+						}
+					}
+					if !hasApproval {
+						http.Error(w, "Branch protection requires approval before merging", http.StatusForbidden)
+						return
+					}
+				}
+					// NoForcePush protection is enforced at push time, not merge time
+			}
 		}
 
 		author := "anonymous"
@@ -233,8 +263,14 @@ func MergePR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFun
 			author = did
 		}
 
-		pr.SetStatus(author, crdt.StatusMerged)
-		_ = store.Save()
+		err = store.Update(repoID, prID, func(pr *crdt.PullRequest) error {
+			pr.SetStatus(author, crdt.StatusMerged)
+			return nil
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
 		wm.Dispatch(webhooks.Event{
 			Type: webhooks.EventPRMerged,

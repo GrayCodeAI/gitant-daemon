@@ -66,14 +66,16 @@ func (s *TaskStore) Save() error {
 	return persistence.SaveJSON(filepath.Join(s.dataDir, "tasks.json"), s.tasks)
 }
 
-// List returns all tasks for a repository, optionally filtered by status
+// List returns a copy of all tasks for a repository, optionally filtered by status
 func (s *TaskStore) List(repoID string, status TaskStatus) []Task {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	tasks := s.tasks[repoID]
 	if status == "" {
-		return tasks
+		result := make([]Task, len(tasks))
+		copy(result, tasks)
+		return result
 	}
 
 	filtered := make([]Task, 0)
@@ -118,18 +120,33 @@ func (s *TaskStore) Claim(repoID, taskID, claimedBy string) error {
 			s.tasks[repoID][i].Status = TaskClaimed
 			s.tasks[repoID][i].ClaimedBy = claimedBy
 			s.tasks[repoID][i].ClaimedAt = &now
-			return s.Save()
+			return s.saveLocked()
 		}
 	}
 
 	return fmt.Errorf("task not found: %s", taskID)
 }
 
-// All returns all tasks across all repositories
+// saveLocked persists while the caller already holds the write lock.
+func (s *TaskStore) saveLocked() error {
+	if s.dataDir == "" {
+		return nil
+	}
+	path := filepath.Join(s.dataDir, "tasks.json")
+	return persistence.SaveJSON(path, s.tasks)
+}
+
+// All returns deep copies of all tasks across all repositories
 func (s *TaskStore) All() map[string][]Task {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.tasks
+	data := make(map[string][]Task, len(s.tasks))
+	for repoID, tasks := range s.tasks {
+		tasksCopy := make([]Task, len(tasks))
+		copy(tasksCopy, tasks)
+		data[repoID] = tasksCopy
+	}
+	return data
 }
 
 // Complete completes a task
@@ -146,7 +163,7 @@ func (s *TaskStore) Complete(repoID, taskID, result string) error {
 			s.tasks[repoID][i].Status = TaskCompleted
 			s.tasks[repoID][i].CompletedAt = &now
 			s.tasks[repoID][i].Result = result
-			return s.Save()
+			return s.saveLocked()
 		}
 	}
 

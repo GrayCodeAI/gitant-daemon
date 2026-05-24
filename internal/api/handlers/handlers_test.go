@@ -292,7 +292,7 @@ func TestMergePR(t *testing.T) {
 	store.Create("repo", "pr-1", "alice", "Feature", "", "feature", "main")
 
 	r := chiRouter()
-	r.Post("/{id}/prs/{prId}/merge", MergePR(store, setupTestWebhookManager(t)))
+	r.Post("/{id}/prs/{prId}/merge", MergePR(store, nil, setupTestWebhookManager(t)))
 
 	req := httptest.NewRequest("POST", "/repo/prs/pr-1/merge", nil)
 	w := httptest.NewRecorder()

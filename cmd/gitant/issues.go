@@ -160,6 +160,7 @@ func init() {
 		c.MarkFlagRequired("repo")
 		c.Flags().String("daemon-url", "", "Daemon URL (default: http://localhost:7777)")
 	}
+	issueListCmd.Flags().String("status", "", "Filter by status (open|closed)")
 	issueCreateCmd.Flags().StringP("title", "t", "", "Issue title (required)")
 	issueCreateCmd.Flags().StringP("body", "b", "", "Issue body")
 	issueCreateCmd.Flags().StringP("labels", "l", "", "Comma-separated labels")

@@ -116,7 +116,24 @@ func (s *IssueStore) Delete(repoID, issueID string) error {
 	}
 
 	delete(repo, issueID)
-	return s.Save()
+	return s.saveLocked()
+}
+
+// saveLocked persists while the caller already holds the write lock.
+func (s *IssueStore) saveLocked() error {
+	if s.path == "" {
+		return nil
+	}
+	data := make(map[string]map[string]*Issue, len(s.issues))
+	for repoID, repoIssues := range s.issues {
+		repoCopy := make(map[string]*Issue, len(repoIssues))
+		for k, v := range repoIssues {
+			issueCopy := *v
+			repoCopy[k] = &issueCopy
+		}
+		data[repoID] = repoCopy
+	}
+	return persistence.SaveJSON(s.path, data)
 }
 
 // SaveIssue persists after a mutation (convenience for handlers)
@@ -124,9 +141,38 @@ func (s *IssueStore) SaveIssue(repoID, issueID string) error {
 	return s.Save()
 }
 
-// All returns all issues across all repositories
+// Update atomically gets an issue, calls fn while holding the write lock,
+// then persists. fn receives the issue and may mutate it freely.
+func (s *IssueStore) Update(repoID, issueID string, fn func(*Issue) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, ok := s.issues[repoID]
+	if !ok {
+		return fmt.Errorf("repository not found: %s", repoID)
+	}
+	issue, ok := repo[issueID]
+	if !ok {
+		return fmt.Errorf("issue not found: %s", issueID)
+	}
+	if err := fn(issue); err != nil {
+		return err
+	}
+	return s.saveLocked()
+}
+
+// All returns deep copies of all issues across all repositories
 func (s *IssueStore) All() map[string]map[string]*Issue {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.issues
+	data := make(map[string]map[string]*Issue, len(s.issues))
+	for repoID, repoIssues := range s.issues {
+		repoCopy := make(map[string]*Issue, len(repoIssues))
+		for k, v := range repoIssues {
+			issueCopy := *v
+			repoCopy[k] = &issueCopy
+		}
+		data[repoID] = repoCopy
+	}
+	return data
 }

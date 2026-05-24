@@ -36,7 +36,10 @@ func handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 					"summary":     "Server status",
 					"description": "Returns version, uptime, peer count, repo count, identity DID",
 					"tags":        []string{"System"},
-					"responses":    statusResponse(),
+					"responses": successResponse(map[string]interface{}{
+						"version": "0.1.0", "peers": 0, "repos": 1,
+						"agents": 1, "uptime": "1h2m3s", "identity": "did:key:z6Mk...",
+					}),
 				},
 			},
 			"/api/v1/repos": map[string]interface{}{
@@ -362,6 +365,35 @@ func handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 					"responses":   statusResponse(),
 				},
 			},
+			"/api/v1/repos/{id}/releases": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary": "List releases", "tags": []string{"Releases"},
+					"parameters": []map[string]interface{}{pathParam("id", "Repository ID")},
+					"responses":  statusResponse(),
+				},
+				"post": map[string]interface{}{
+					"summary":     "Create release",
+					"description": "Create a new tagged release (requires auth)",
+					"tags":        []string{"Releases"},
+					"security":    bearerAuth(),
+					"parameters":  []map[string]interface{}{pathParam("id", "Repository ID")},
+					"requestBody": jsonBody(map[string]interface{}{"tag": "v1.0.0", "title": "Release title", "body": "Release notes"}),
+					"responses":   statusResponse(),
+				},
+			},
+			"/api/v1/repos/{id}/releases/{releaseId}": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary": "Get release", "tags": []string{"Releases"},
+					"parameters": []map[string]interface{}{pathParam("id", "Repository ID"), pathParam("releaseId", "Release ID")},
+					"responses":  statusResponse(),
+				},
+				"delete": map[string]interface{}{
+					"summary": "Delete release", "tags": []string{"Releases"},
+					"security":   bearerAuth(),
+					"parameters": []map[string]interface{}{pathParam("id", "Repository ID"), pathParam("releaseId", "Release ID")},
+					"responses":   statusResponse(),
+				},
+			},
 			"/api/v1/repos/{id}/protections": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary": "List branch protections", "tags": []string{"Protections"},
@@ -547,6 +579,7 @@ func handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 			{"name": "Commits", "description": "Commit history and diffs"},
 			{"name": "Labels", "description": "Issue/PR labeling"},
 			{"name": "Tasks", "description": "Task board"},
+			{"name": "Releases", "description": "Tagged releases"},
 			{"name": "Protections", "description": "Branch protection rules"},
 			{"name": "Agents", "description": "Agent/DID management"},
 			{"name": "Webhooks", "description": "Webhook registration"},
@@ -569,14 +602,23 @@ func jsonContent(example interface{}) map[string]interface{} {
 	}
 }
 
-func statusResponse() map[string]interface{} {
+// successResponse returns a 200 response with an example JSON body.
+func successResponse(example interface{}) map[string]interface{} {
 	return map[string]interface{}{
-		"200": map[string]interface{}{"description": "Success"},
+		"200": map[string]interface{}{
+			"description": "Success",
+			"content":     jsonContent(example),
+		},
 		"400": map[string]interface{}{"description": "Bad request / validation error"},
 		"401": map[string]interface{}{"description": "Unauthorized (missing or invalid token)"},
 		"404": map[string]interface{}{"description": "Not found"},
 		"500": map[string]interface{}{"description": "Internal server error"},
 	}
+}
+
+
+func statusResponse() map[string]interface{} {
+	return successResponse(map[string]interface{}{})
 }
 
 func bearerAuth() []map[string]interface{} {

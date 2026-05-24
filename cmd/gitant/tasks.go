@@ -121,6 +121,7 @@ func init() {
 		c.MarkFlagRequired("repo")
 		c.Flags().String("daemon-url", "", "Daemon URL (default: http://localhost:7777)")
 	}
+	taskListCmd.Flags().String("status", "", "Filter by status (open|claimed|completed)")
 	taskCreateCmd.Flags().StringP("title", "t", "", "Task title (required)")
 	taskCreateCmd.Flags().StringP("description", "d", "", "Task description")
 	taskCompleteCmd.Flags().String("result", "", "Task result")
