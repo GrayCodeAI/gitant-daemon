@@ -147,6 +147,9 @@ func handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 					"parameters": []map[string]interface{}{
 						pathParam("id", "Repository ID"),
 						queryParam("status", "Filter by status (open, closed, all)", false),
+						queryParam("labels", "Comma-separated labels (issue must have all)", false),
+						queryParam("offset", "Pagination offset", false),
+						queryParam("limit", "Page size", false),
 					},
 					"responses": statusResponse(),
 				},
@@ -207,6 +210,8 @@ func handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 					"parameters": []map[string]interface{}{
 						pathParam("id", "Repository ID"),
 						queryParam("status", "Filter by status (open, closed, merged, all)", false),
+						queryParam("offset", "Pagination offset", false),
+						queryParam("limit", "Page size", false),
 					},
 					"responses": statusResponse(),
 				},

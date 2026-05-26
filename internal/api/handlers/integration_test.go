@@ -279,6 +279,26 @@ func TestIntegrationWorkflow_IssueWorkflow(t *testing.T) {
 	if fetchedIssue["status"] != string(crdt.StatusClosed) {
 		t.Fatalf("expected status 'closed' after close, got %v", fetchedIssue["status"])
 	}
+
+	// Step 7: Filter open issues
+	req = httptest.NewRequest("GET", "/repos/issue-repo/issues?status=open", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	json.Unmarshal(w.Body.Bytes(), &listResult)
+	issues = listResult["issues"].([]interface{})
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 open issue after close, got %d", len(issues))
+	}
+
+	// Step 8: Filter by label
+	req = httptest.NewRequest("GET", "/repos/issue-repo/issues?labels=enhancement", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	json.Unmarshal(w.Body.Bytes(), &listResult)
+	issues = listResult["issues"].([]interface{})
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 enhancement issue, got %d", len(issues))
+	}
 }
 
 func TestIntegrationWorkflow_PRWorkflow(t *testing.T) {
@@ -421,6 +441,24 @@ func TestIntegrationWorkflow_PRWorkflow(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &fetchedPR)
 	if fetchedPR["status"] != string(crdt.StatusMerged) {
 		t.Fatalf("expected status 'merged' after merge, got %v", fetchedPR["status"])
+	}
+
+	req = httptest.NewRequest("GET", "/repos/pr-repo/prs?status=open", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	json.Unmarshal(w.Body.Bytes(), &listResult)
+	prs = listResult["prs"].([]interface{})
+	if len(prs) != 1 {
+		t.Fatalf("expected 1 open PR after merge, got %d", len(prs))
+	}
+
+	req = httptest.NewRequest("GET", "/repos/pr-repo/prs?status=merged", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	json.Unmarshal(w.Body.Bytes(), &listResult)
+	prs = listResult["prs"].([]interface{})
+	if len(prs) != 1 {
+		t.Fatalf("expected 1 merged PR, got %d", len(prs))
 	}
 }
 

@@ -96,6 +96,7 @@ func ListPRs(store *crdt.PullRequestStore) http.HandlerFunc {
 		repoID := chi.URLParam(r, "id")
 
 		prs := store.List(repoID)
+		prs = filterPRs(prs, parsePRStatusFilter(r))
 
 		result := make([]map[string]interface{}, 0, len(prs))
 		for _, pr := range prs {

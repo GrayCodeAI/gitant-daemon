@@ -72,7 +72,7 @@
 
 ---
 
-## Phase B — Production single-node ✅ mostly complete
+## Phase B — Production single-node ✅ complete
 
 ### Daemon
 - [x] Real merge commits when branches diverged (not just FF)
@@ -81,6 +81,7 @@
 - [x] Server integration tests **with** auth middleware
 - [x] Enforce UCAN per-route: `repo:{id}` read/write capabilities
 - [x] Fix fork: inherit visibility rules, block private fork without auth
+- [x] Issue/PR list filters (`status`, `labels` query params)
 
 ### Web
 - [x] Repo stars UI (`starRepo`, `getStarCount`)
@@ -93,9 +94,9 @@
 ### MCP
 - [x] `push_packfile` tool (CLI parity)
 - [x] Pagination params on list tools
-- [ ] Remove bogus `status`/`labels` filters or implement in daemon
-- [ ] npm publish `v0.1.0` + tag (deprioritized — Go release path preferred)
-- [ ] MCP tool handler integration tests
+- [x] List filters aligned with daemon (`status`, `labels`)
+- [x] MCP tool handler integration tests
+- [ ] npm publish (deferred — Go binary release path preferred)
 
 ### Ops
 - [x] `docker-compose.prod.yml` with Caddy/nginx TLS
@@ -180,4 +181,4 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 
 ---
 
-*Last updated: 2026-05-26 — Phase A implementation in progress.*
+*Last updated: 2026-05-26 — Phase B complete; Phase C in progress.*

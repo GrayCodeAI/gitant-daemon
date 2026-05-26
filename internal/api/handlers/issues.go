@@ -97,6 +97,9 @@ func ListIssues(store *crdt.IssueStore) http.HandlerFunc {
 		repoID := chi.URLParam(r, "id")
 
 		issues := store.List(repoID)
+		statusFilter := parseIssueStatusFilter(r)
+		labelFilter := parseLabelsFilter(r)
+		issues = filterIssues(issues, statusFilter, labelFilter)
 
 		result := make([]map[string]interface{}, 0, len(issues))
 		for _, issue := range issues {
