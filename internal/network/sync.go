@@ -40,14 +40,24 @@ type SyncCoordinator struct {
 	node    *Node
 	objects ObjectStore
 	crdt    CRDTStore
+	trust   TrustStore
+	pinner  ObjectPinner
+}
+
+// ObjectPinner optionally pins replicated git objects (IPFS warm storage adapter).
+type ObjectPinner interface {
+	PinGitObject(ctx context.Context, repoID, hash string, data []byte) (string, error)
+	IsPinned(repoID, hash string) bool
 }
 
 // NewSyncCoordinator registers replication handlers on a node.
-func NewSyncCoordinator(node *Node, objects ObjectStore, crdtStore CRDTStore) *SyncCoordinator {
+func NewSyncCoordinator(node *Node, objects ObjectStore, crdtStore CRDTStore, trustStore TrustStore, pinner ObjectPinner) *SyncCoordinator {
 	coord := &SyncCoordinator{
 		node:    node,
 		objects: objects,
 		crdt:    crdtStore,
+		trust:   trustStore,
+		pinner:  pinner,
 	}
 	if node == nil {
 		return coord
@@ -56,6 +66,9 @@ func NewSyncCoordinator(node *Node, objects ObjectStore, crdtStore CRDTStore) *S
 	registerBlockHandler(node, objects)
 	if err := coord.startCRDTSubscriber(); err != nil {
 		slog.Warn("CRDT gossip subscription failed", "error", err)
+	}
+	if err := coord.startAttestationSubscriber(); err != nil {
+		slog.Warn("attestation gossip subscription failed", "error", err)
 	}
 
 	node.SetFederatedEventHandler(coord.handleFederatedEvent)
@@ -96,13 +109,30 @@ func (c *SyncCoordinator) PublishPR(repoID string, pr *crdt.PullRequest) error {
 	})
 }
 
-// AnnouncePushObjects announces git object hashes in the DHT.
+// AnnouncePushObjects announces git object hashes in the DHT and optional pin store.
 func (c *SyncCoordinator) AnnouncePushObjects(ctx context.Context, repoID string, hashes []string) {
 	if c == nil || c.node == nil {
 		return
 	}
 	for _, hash := range hashes {
 		c.node.AnnounceObject(ctx, repoID, hash)
+		c.pinLocalObject(ctx, repoID, hash)
+	}
+}
+
+func (c *SyncCoordinator) pinLocalObject(ctx context.Context, repoID, hash string) {
+	if c == nil || c.pinner == nil || c.objects == nil {
+		return
+	}
+	if c.pinner.IsPinned(repoID, hash) {
+		return
+	}
+	_, data, err := c.objects.GetObject(repoID, hash)
+	if err != nil {
+		return
+	}
+	if _, err := c.pinner.PinGitObject(ctx, repoID, hash, data); err != nil {
+		slog.Debug("IPFS pin failed", "repo", repoID, "hash", hash, "error", err)
 	}
 }
 
@@ -204,6 +234,9 @@ func (c *SyncCoordinator) handleFederatedEvent(event FederatedEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_ = c.node.SyncObjects(ctx, c.objects, peerID, event.Repo, hashes)
+	for _, hash := range hashes {
+		c.pinLocalObject(ctx, event.Repo, hash)
+	}
 }
 
 // ParseObjectHashes extracts git object hashes from webhook event data.

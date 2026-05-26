@@ -15,6 +15,7 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/cli"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/identity"
+	"github.com/lakshmanpatel/gitant/internal/ipfs"
 	"github.com/lakshmanpatel/gitant/internal/network"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
@@ -174,7 +175,16 @@ var serveCmd = &cobra.Command{
 			if err != nil {
 				slog.Warn("P2P startup failed, continuing HTTP-only", "error", err)
 			} else {
-				server.SetNetwork(netNode)
+				var pinner network.ObjectPinner
+				ipfsPin, _ := cmd.Flags().GetBool("ipfs-pin")
+				if envIPFS := os.Getenv("GITANT_IPFS_PIN"); envIPFS != "" {
+					ipfsPin = envIPFS == "1" || strings.EqualFold(envIPFS, "true")
+				}
+				if ipfsPin {
+					pinner = ipfs.NewPinningAdapter(ipfs.NewPinningStore())
+					slog.Info("IPFS warm pinning enabled")
+				}
+				server.SetNetwork(netNode, pinner)
 			}
 		}
 
@@ -434,6 +444,7 @@ func init() {
 	serveCmd.Flags().String("p2p-listen", "/ip4/0.0.0.0/tcp/0", "libp2p listen multiaddr")
 	serveCmd.Flags().Bool("p2p-mdns", true, "Enable mDNS peer discovery on LAN")
 	serveCmd.Flags().StringSlice("bootstrap-peers", nil, "Bootstrap peer multiaddrs (repeatable)")
+	serveCmd.Flags().Bool("ipfs-pin", false, "Pin replicated git objects in warm IPFS storage")
 
 	pushCmd.Flags().StringP("remote", "r", "http://localhost:7777", "Remote daemon URL")
 	pushCmd.Flags().String("repo", "", "Repository name (required)")

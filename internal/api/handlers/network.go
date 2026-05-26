@@ -54,6 +54,15 @@ func DiscoverFederation(node *network.Node) http.HandlerFunc {
 	}
 }
 
+// BootstrapPeers returns configured federation bootstrap multiaddrs.
+func BootstrapPeers() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"peers": network.MergeBootstrapPeers(nil),
+		})
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

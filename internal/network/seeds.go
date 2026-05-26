@@ -1,17 +1,32 @@
 package network
 
 import (
+	_ "embed"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"strings"
 )
 
-// DefaultBootstrapPeers returns well-known seed nodes for WAN federation.
-// Override with --bootstrap-peers or GITANT_BOOTSTRAP_PEERS.
+//go:embed bootstrap_peers.json
+var embeddedBootstrapPeers []byte
+
+// DefaultBootstrapPeers returns well-known Gitant seed nodes for WAN federation.
+// Override with GITANT_SEED_PEERS, --bootstrap-peers, or bootstrap_peers.json at deploy time.
 func DefaultBootstrapPeers() []string {
 	if seeds := os.Getenv("GITANT_SEED_PEERS"); seeds != "" {
 		return splitPeers(seeds)
 	}
-	return nil
+	return loadEmbeddedBootstrapPeers()
+}
+
+func loadEmbeddedBootstrapPeers() []string {
+	var peers []string
+	if err := json.Unmarshal(embeddedBootstrapPeers, &peers); err != nil {
+		slog.Warn("failed to parse embedded bootstrap peers", "error", err)
+		return nil
+	}
+	return peers
 }
 
 func splitPeers(raw string) []string {

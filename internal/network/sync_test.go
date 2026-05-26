@@ -82,7 +82,7 @@ func TestBlockExchangeBetweenPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node1.Close()
-	_ = NewSyncCoordinator(node1, providerStore, nil)
+	_ = NewSyncCoordinator(node1, providerStore, nil, nil, nil)
 
 	node2, err := StartNode(ctx, NodeConfig{
 		ListenAddr: "/ip4/127.0.0.1/tcp/0",
@@ -95,7 +95,7 @@ func TestBlockExchangeBetweenPeers(t *testing.T) {
 	defer node2.Close()
 
 	consumerStore := newMemoryObjectStore()
-	_ = NewSyncCoordinator(node2, consumerStore, nil)
+	_ = NewSyncCoordinator(node2, consumerStore, nil, nil, nil)
 
 	if err := node2.Host.Connect(ctx, node1.AdvertisedAddrs()[0]); err != nil {
 		t.Fatal(err)

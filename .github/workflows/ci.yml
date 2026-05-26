@@ -67,3 +67,16 @@ jobs:
           sleep 3
           curl -f http://localhost:7777/health || (docker logs gitant-test && exit 1)
           docker stop gitant-test
+
+  multinode:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Block exchange unit test
+        run: go test ./internal/network/... -run BlockExchange -count=1 -timeout 2m
+      - name: Two-node P2P mesh smoke test
+        run: bash scripts/ci-multinode.sh

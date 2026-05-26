@@ -2,12 +2,15 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/lakshmanpatel/gitant/internal/persistence"
 )
@@ -71,6 +74,42 @@ func (r *AgentRegistry) Record(did string) {
 	}
 }
 
+// ApplyAttestation merges a cross-peer trust attestation for an agent DID.
+func (r *AgentRegistry) ApplyAttestation(sourceDID, targetDID string, score float64) error {
+	if targetDID == "" {
+		return fmt.Errorf("target DID is required")
+	}
+	if score < 0 || score > 1 {
+		return fmt.Errorf("score must be between 0 and 1")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	agent, ok := r.agents[targetDID]
+	if !ok {
+		agent = &Agent{
+			DID:        targetDID,
+			FirstSeen:  time.Now(),
+			LastSeen:   time.Now(),
+			TrustScore: 0.5,
+		}
+		r.agents[targetDID] = agent
+	}
+
+	// Blend local score with remote attestation (EMA).
+	agent.TrustScore = agent.TrustScore*0.7 + score*0.3
+	if agent.TrustScore > 1 {
+		agent.TrustScore = 1
+	}
+	if agent.TrustScore < 0 {
+		agent.TrustScore = 0
+	}
+	agent.LastSeen = time.Now()
+	_ = sourceDID
+	return r.Save()
+}
+
 // Get returns an agent by DID
 func (r *AgentRegistry) Get(did string) (*Agent, bool) {
 	r.mu.RLock()
@@ -131,6 +170,51 @@ func GetAgent(registry *AgentRegistry) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(agent)
+	}
+}
+
+// AttestAgent records a trust attestation for an agent DID.
+func AttestAgent(registry *AgentRegistry, publish func(targetDID string, score float64, reason string) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		targetDID := chi.URLParam(r, "did")
+		if targetDID == "" {
+			http.Error(w, "DID is required", http.StatusBadRequest)
+			return
+		}
+
+		var req struct {
+			Score  float64 `json:"score"`
+			Reason string  `json:"reason"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		sourceDID := authMiddleware.GetIdentity(r)
+		if sourceDID == "" {
+			sourceDID = "anonymous"
+		}
+
+		if err := registry.ApplyAttestation(sourceDID, targetDID, req.Score); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if publish != nil {
+			if err := publish(targetDID, req.Score, req.Reason); err != nil {
+				slog.Warn("failed to publish attestation", "target", targetDID, "error", err)
+			}
+		}
+
+		agent, _ := registry.Get(targetDID)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":     true,
+			"target_did":  targetDID,
+			"source_did":  sourceDID,
+			"trust_score": agent.TrustScore,
+		})
 	}
 }
 

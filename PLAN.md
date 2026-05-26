@@ -37,7 +37,7 @@
 | DID + UCAN + HTTP Signatures | **Implemented** — enforcement gaps being closed |
 | Web dashboard | **Operational locally** — most daemon APIs wired |
 | MCP (58 tools) | **Dev-ready** — schema fixes + npm publish pending |
-| P2P / multi-node sync | **Partial** — `--p2p` wires libp2p; gossip + federation API; full CRDT sync pending |
+| P2P / multi-node sync | **Partial** — block exchange + CRDT gossip; bootstrap seeds via env |
 
 ---
 
@@ -116,16 +116,16 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 - [x] Config: `--p2p`, `--bootstrap-peers`, listen addrs
 - [x] Status API: real peer count, connected multiaddrs
 
-### C2 — Data replication (partial)
+### C2 — Data replication ✅
 - [x] GossipSub topics per repo: `gitant/repo/{id}/events`
 - [x] DHT provide repo head on push
-- [ ] Replicate blockstore objects on push (provide/find via DHT)
-- [ ] CRDT op broadcast: issue/PR/task Lamport ops merged across peers
-- [ ] Conflict resolution policy documented + tested
+- [x] Replicate git objects on push (`/gitant/block/1.0.0` + DHT announce)
+- [x] CRDT op broadcast: issue/PR Lamport ops merged across peers
+- [x] Conflict resolution policy documented + tested (`docs/CRDT_SYNC.md`)
 
 ### C3 — Federation (partial)
 - [x] Cross-instance discovery endpoint (`GET /api/v1/federation/discover`)
-- [ ] Bootstrap seed nodes (Phase 5 roadmap)
+- [x] Bootstrap seed nodes via `GITANT_SEED_PEERS` / `--bootstrap-peers`
 - [ ] Optional IPFS pinning adapter (stub remains in `internal/ipfs/`)
 
 ### C4 — Agent economy
@@ -181,4 +181,4 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 
 ---
 
-*Last updated: 2026-05-26 — Phase B complete; Phase C in progress.*
+*Last updated: 2026-05-26 — Phase C3/C4 foundation complete; marketplace pending.*

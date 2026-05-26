@@ -67,6 +67,7 @@ type Server struct {
 	startTime   time.Time
 	network     *network.Node
 	sync        *network.SyncCoordinator
+	pinner      network.ObjectPinner
 }
 
 func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string, corsOrigins []string) *Server {
@@ -102,8 +103,9 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 }
 
 // SetNetwork attaches the libp2p node and wires federated replication.
-func (s *Server) SetNetwork(node *network.Node) {
+func (s *Server) SetNetwork(node *network.Node, pinner network.ObjectPinner) {
 	s.network = node
+	s.pinner = pinner
 	if node == nil {
 		return
 	}
@@ -112,6 +114,8 @@ func (s *Server) SetNetwork(node *network.Node) {
 		node,
 		newRepoObjectStore(s.repos),
 		newCRDTSyncStore(s.issues, s.prs),
+		newAgentTrustStore(s.agents),
+		pinner,
 	)
 
 	if s.webhooks == nil {
@@ -243,6 +247,7 @@ func (s *Server) setupRoutes() {
 	s.router.Get("/health", s.handleHealth)
 	s.router.Get("/api/v1/status", s.handleStatus)
 	s.router.Get("/api/v1/network/peers", handlers.NetworkStatus(s.network))
+	s.router.Get("/api/v1/network/bootstrap", handlers.BootstrapPeers())
 	s.router.Get("/api/v1/federation/discover", handlers.DiscoverFederation(s.network))
 	s.router.Handle("/metrics", promhttp.Handler())
 	s.router.Get("/api/v1/openapi.json", handleOpenAPI)
@@ -331,6 +336,12 @@ func (s *Server) setupRoutes() {
 			r.Use(authMiddleware.RequireIdentity)
 			r.Post("/verify", handlers.VerifyUCAN())
 			r.Post("/{did}/delegate", handlers.DelegateCapability(s.identity))
+			r.Post("/{did}/attest", handlers.AttestAgent(s.agents, func(targetDID string, score float64, reason string) error {
+				if s.sync == nil {
+					return nil
+				}
+				return s.sync.PublishAttestation(targetDID, score, reason)
+			}))
 		})
 	})
 
@@ -405,6 +416,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status["p2p"] = map[string]interface{}{
 			"enabled": false,
 		}
+	}
+
+	if counter, ok := s.pinner.(interface{ PinCount() int }); ok {
+		status["ipfs_pins"] = counter.PinCount()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

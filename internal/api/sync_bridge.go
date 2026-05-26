@@ -7,6 +7,7 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/network"
 	"github.com/lakshmanpatel/gitant/internal/storage"
+	"github.com/lakshmanpatel/gitant/internal/api/handlers"
 )
 
 type repoObjectStore struct {
@@ -56,6 +57,18 @@ type crdtSyncStore struct {
 
 func newCRDTSyncStore(issues *crdt.IssueStore, prs *crdt.PullRequestStore) network.CRDTStore {
 	return &crdtSyncStore{issues: issues, prs: prs}
+}
+
+type agentTrustStore struct {
+	agents *handlers.AgentRegistry
+}
+
+func newAgentTrustStore(agents *handlers.AgentRegistry) network.TrustStore {
+	return &agentTrustStore{agents: agents}
+}
+
+func (s *agentTrustStore) ApplyAttestation(sourceDID, targetDID string, score float64) error {
+	return s.agents.ApplyAttestation(sourceDID, targetDID, score)
 }
 
 func (s *crdtSyncStore) MergeIssue(repoID string, issue *crdt.Issue) error {
