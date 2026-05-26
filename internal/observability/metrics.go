@@ -13,6 +13,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+type contextKey string
+
+const requestIDKey contextKey = "request_id"
+
 // Metrics holds all Prometheus metrics
 type Metrics struct {
 	HTTPRequestsTotal   *prometheus.CounterVec
@@ -152,7 +156,7 @@ func LoggerMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 				reqID = generateRequestID()
 			}
 
-			ctx := context.WithValue(r.Context(), "request_id", reqID)
+			ctx := context.WithValue(r.Context(), requestIDKey, reqID)
 			r = r.WithContext(ctx)
 
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
@@ -202,14 +206,14 @@ func RequestIDMiddleware(next http.Handler) http.Handler {
 		}
 
 		w.Header().Set("X-Request-ID", reqID)
-		ctx := context.WithValue(r.Context(), "request_id", reqID)
+		ctx := context.WithValue(r.Context(), requestIDKey, reqID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 // GetRequestID gets the request ID from the context
 func GetRequestID(ctx context.Context) string {
-	if reqID, ok := ctx.Value("request_id").(string); ok {
+	if reqID, ok := ctx.Value(requestIDKey).(string); ok {
 		return reqID
 	}
 	return ""

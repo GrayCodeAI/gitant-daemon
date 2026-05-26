@@ -79,7 +79,7 @@ func renderNode(sb *strings.Builder, nodeMap map[string]*Node, children map[stri
 		marker = "◉"
 	}
 
-	sb.WriteString(fmt.Sprintf("%s%s %s %s (%s)\n", prefix, marker, node.ShortHash, node.Message, node.Age))
+	fmt.Fprintf(sb, "%s%s %s %s (%s)\n", prefix, marker, node.ShortHash, node.Message, node.Age)
 
 	// Render children
 	childHashes := children[hash]
@@ -91,7 +91,7 @@ func renderNode(sb *strings.Builder, nodeMap map[string]*Node, children map[stri
 			childPrefix += "  "
 		}
 
-		sb.WriteString(fmt.Sprintf("%s│\n", prefix))
+		fmt.Fprintf(sb, "%s│\n", prefix)
 		renderNode(sb, nodeMap, children, childHash, childPrefix, visited)
 	}
 }

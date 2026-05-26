@@ -112,8 +112,6 @@ func parseYAML(data []byte, v interface{}) error {
 					job.Name = strings.TrimSpace(strings.TrimPrefix(content, "name:"))
 					job.Name = strings.Trim(job.Name, "'\"")
 					workflow.Jobs[currentJob] = job
-				} else if content == "steps:" {
-					// Steps section
 				}
 			} else if indent == 6 && currentJob != "" {
 				if strings.HasPrefix(content, "- ") {

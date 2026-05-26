@@ -3,7 +3,6 @@ package graphql
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/storage"
@@ -30,107 +29,6 @@ func NewResolver(
 		prs:    prs,
 		tasks:  tasks,
 	}
-}
-
-// Repository resolver
-type repoResolver struct {
-	*Resolver
-}
-
-func (r *repoResolver) ID(ctx context.Context, obj *storage.RepoEntry) (string, error) {
-	return obj.ID, nil
-}
-
-func (r *repoResolver) Name(ctx context.Context, obj *storage.RepoEntry) (string, error) {
-	return obj.Name, nil
-}
-
-func (r *repoResolver) Description(ctx context.Context, obj *storage.RepoEntry) (string, error) {
-	return obj.Description, nil
-}
-
-func (r *repoResolver) Private(ctx context.Context, obj *storage.RepoEntry) (bool, error) {
-	return obj.Private, nil
-}
-
-func (r *repoResolver) CreatedAt(ctx context.Context, obj *storage.RepoEntry) (string, error) {
-	return obj.CreatedAt, nil
-}
-
-func (r *repoResolver) Issues(ctx context.Context, obj *storage.RepoEntry) ([]*crdt.Issue, error) {
-	issues := r.issues.List(obj.ID)
-	result := make([]*crdt.Issue, len(issues))
-	copy(result, issues)
-	return result, nil
-}
-
-func (r *repoResolver) PullRequests(ctx context.Context, obj *storage.RepoEntry) ([]*crdt.PullRequest, error) {
-	prs := r.prs.List(obj.ID)
-	result := make([]*crdt.PullRequest, len(prs))
-	copy(result, prs)
-	return result, nil
-}
-
-// Issue resolver
-type issueResolver struct {
-	*Resolver
-}
-
-func (r *issueResolver) ID(ctx context.Context, obj *crdt.Issue) (string, error) {
-	return obj.ID, nil
-}
-
-func (r *issueResolver) Title(ctx context.Context, obj *crdt.Issue) (string, error) {
-	return obj.Title, nil
-}
-
-func (r *issueResolver) Body(ctx context.Context, obj *crdt.Issue) (string, error) {
-	return obj.Body, nil
-}
-
-func (r *issueResolver) Status(ctx context.Context, obj *crdt.Issue) (string, error) {
-	return string(obj.Status), nil
-}
-
-func (r *issueResolver) Author(ctx context.Context, obj *crdt.Issue) (string, error) {
-	return obj.Author, nil
-}
-
-func (r *issueResolver) Labels(ctx context.Context, obj *crdt.Issue) ([]string, error) {
-	return obj.Labels, nil
-}
-
-func (r *issueResolver) CreatedAt(ctx context.Context, obj *crdt.Issue) (string, error) {
-	return obj.CreatedAt.Format(time.RFC3339), nil
-}
-
-// PullRequest resolver
-type prResolver struct {
-	*Resolver
-}
-
-func (r *prResolver) ID(ctx context.Context, obj *crdt.PullRequest) (string, error) {
-	return obj.ID, nil
-}
-
-func (r *prResolver) Title(ctx context.Context, obj *crdt.PullRequest) (string, error) {
-	return obj.Title, nil
-}
-
-func (r *prResolver) Status(ctx context.Context, obj *crdt.PullRequest) (string, error) {
-	return string(obj.Status), nil
-}
-
-func (r *prResolver) Author(ctx context.Context, obj *crdt.PullRequest) (string, error) {
-	return obj.Author, nil
-}
-
-func (r *prResolver) SourceBranch(ctx context.Context, obj *crdt.PullRequest) (string, error) {
-	return obj.SourceBranch, nil
-}
-
-func (r *prResolver) TargetBranch(ctx context.Context, obj *crdt.PullRequest) (string, error) {
-	return obj.TargetBranch, nil
 }
 
 // Query resolver

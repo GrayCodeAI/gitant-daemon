@@ -89,10 +89,11 @@ func HealthHandler(checker *HealthChecker) http.HandlerFunc {
 
 		status := result["status"].(string)
 		code := http.StatusOK
-		if status == "unhealthy" {
+		switch status {
+		case "unhealthy":
 			code = http.StatusServiceUnavailable
-		} else if status == "degraded" {
-			code = http.StatusOK // Still return 200 for degraded
+		case "degraded":
+			code = http.StatusOK
 		}
 
 		w.Header().Set("Content-Type", "application/json")

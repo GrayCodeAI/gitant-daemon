@@ -64,7 +64,7 @@ func (g *Generator) Generate() string {
 				continue
 			}
 
-			sb.WriteString(fmt.Sprintf("### %s\n\n", strings.Title(t)))
+			sb.WriteString(fmt.Sprintf("### %s%s\n\n", strings.ToUpper(t[:1]), t[1:]))
 			for _, change := range changes {
 				line := fmt.Sprintf("- %s", change.Description)
 				if change.PR != "" {
