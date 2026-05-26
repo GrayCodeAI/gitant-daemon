@@ -219,7 +219,7 @@ func (s *Server) setupRoutes() {
 			r.Use(handlers.RequireRepoReadAccess(s.repos, s.identity.DID))
 			r.Post("/", handlers.CreateRepo(s.repos, s.webhooks))
 			r.Delete("/{id}", handlers.DeleteRepo(s.repos, s.webhooks))
-			r.Post("/{id}/fork", handlers.ForkRepo(s.repos, s.webhooks))
+			r.Post("/{id}/fork", handlers.ForkRepo(s.repos, s.webhooks, s.identity.DID))
 			r.Post("/{id}/star", handlers.StarRepo(s.repos))
 			r.Post("/{id}/unstar", handlers.UnstarRepo(s.repos))
 			r.Post("/{id}/push", handlers.PushObjects(s.repos, s.protection, s.webhooks))

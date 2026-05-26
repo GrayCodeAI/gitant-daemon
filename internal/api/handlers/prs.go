@@ -218,11 +218,22 @@ func ReviewPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFu
 	}
 }
 
-// MergePR merges a pull request (fast-forward target branch, then mark merged).
+// MergePR merges a pull request into its target branch, then marks it merged.
 func MergePR(store *crdt.PullRequestStore, registry *storage.RepositoryRegistry, protections *storage.ProtectionStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		prID := chi.URLParam(r, "prId")
+
+		var req struct {
+			MergeMethod string `json:"merge_method"`
+		}
+		if r.Body != nil && r.ContentLength != 0 {
+			_ = json.NewDecoder(r.Body).Decode(&req)
+		}
+		mergeMethod := req.MergeMethod
+		if mergeMethod == "" {
+			mergeMethod = "merge"
+		}
 
 		// Get PR to check status and target branch before mutating
 		pr, err := store.Get(repoID, prID)
@@ -268,12 +279,8 @@ func MergePR(store *crdt.PullRequestStore, registry *storage.RepositoryRegistry,
 			http.Error(w, "Repository not found", http.StatusNotFound)
 			return
 		}
-		sourceHash, err := repo.GetBranch(pr.SourceBranch)
+		mergeHash, err := repo.MergeBranches(pr.TargetBranch, pr.SourceBranch, author, "", mergeMethod)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Source branch not found: %v", err), http.StatusBadRequest)
-			return
-		}
-		if err := repo.CreateBranch(pr.TargetBranch, sourceHash); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to merge branch: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -298,9 +305,10 @@ func MergePR(store *crdt.PullRequestStore, registry *storage.RepositoryRegistry,
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"id":      prID,
-			"status":  string(crdt.StatusMerged),
+			"success":    true,
+			"id":         prID,
+			"status":     string(crdt.StatusMerged),
+			"merge_hash": mergeHash.String(),
 		})
 	}
 }

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v6"
@@ -185,27 +186,121 @@ func (r *Repository) ListRefs() ([]plumbing.Hash, error) {
 	return hashes, nil
 }
 
+func refName(name string) plumbing.ReferenceName {
+	if strings.HasPrefix(name, "refs/") {
+		return plumbing.ReferenceName(name)
+	}
+	return plumbing.NewBranchReferenceName(name)
+}
+
 // CreateBranch creates a new branch pointing to a commit
 func (r *Repository) CreateBranch(name string, commitHash plumbing.Hash) error {
-	refName := plumbing.NewBranchReferenceName(name)
-	ref := plumbing.NewHashReference(refName, commitHash)
+	return r.UpdateRef(name, commitHash)
+}
+
+// UpdateRef creates or moves a ref to a commit hash.
+func (r *Repository) UpdateRef(name string, commitHash plumbing.Hash) error {
+	ref := plumbing.NewHashReference(refName(name), commitHash)
 	return r.repo.Storer.SetReference(ref)
 }
 
 // DeleteBranch deletes a branch
 func (r *Repository) DeleteBranch(name string) error {
-	refName := plumbing.NewBranchReferenceName(name)
-	return r.repo.Storer.RemoveReference(refName)
+	return r.DeleteRef(name)
+}
+
+// DeleteRef removes a git ref (branch or tag).
+func (r *Repository) DeleteRef(name string) error {
+	return r.repo.Storer.RemoveReference(refName(name))
 }
 
 // GetBranch returns the commit hash a branch points to
 func (r *Repository) GetBranch(name string) (plumbing.Hash, error) {
-	refName := plumbing.NewBranchReferenceName(name)
-	ref, err := r.repo.Reference(refName, true)
+	ref, err := r.repo.Reference(refName(name), true)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("getting branch: %w", err)
 	}
 	return ref.Hash(), nil
+}
+
+// MergeBranches merges source into target. Fast-forwards when possible; otherwise
+// creates a merge commit (or squash commit when method is "squash").
+func (r *Repository) MergeBranches(targetBranch, sourceBranch, author, message, method string) (plumbing.Hash, error) {
+	if method == "" {
+		method = "merge"
+	}
+
+	targetHash, err := r.GetBranch(targetBranch)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("target branch: %w", err)
+	}
+	sourceHash, err := r.GetBranch(sourceBranch)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("source branch: %w", err)
+	}
+
+	if targetHash == sourceHash {
+		return targetHash, nil
+	}
+
+	if isAncestor(r, targetHash, sourceHash) {
+		if err := r.UpdateRef(targetBranch, sourceHash); err != nil {
+			return plumbing.ZeroHash, err
+		}
+		return sourceHash, nil
+	}
+
+	sourceCommit, err := r.GetCommit(sourceHash)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("source commit: %w", err)
+	}
+
+	mergeMsg := message
+	if mergeMsg == "" {
+		mergeMsg = fmt.Sprintf("Merge branch '%s' into %s", sourceBranch, targetBranch)
+	}
+
+	var parents []plumbing.Hash
+	switch method {
+	case "squash":
+		parents = []plumbing.Hash{targetHash}
+		mergeMsg = fmt.Sprintf("Squashed commit of '%s'", sourceBranch)
+	default:
+		parents = []plumbing.Hash{targetHash, sourceHash}
+	}
+
+	mergeHash, err := r.CreateCommit(sourceCommit.TreeHash, parents, author, mergeMsg)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	if err := r.UpdateRef(targetBranch, mergeHash); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return mergeHash, nil
+}
+
+func isAncestor(r *Repository, ancestor, descendant plumbing.Hash) bool {
+	current := descendant
+	seen := make(map[string]bool)
+	for {
+		if current == ancestor {
+			return true
+		}
+		key := current.String()
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+
+		commit, err := r.GetCommit(current)
+		if err != nil {
+			return false
+		}
+		if len(commit.ParentHashes) == 0 {
+			return false
+		}
+		current = commit.ParentHashes[0]
+	}
 }
 
 // TreeEntry represents an entry in a tree object

@@ -175,10 +175,13 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 		// Update refs
 		for _, update := range updates {
 			if update.NewHash == "0000000000000000000000000000000000000000" {
-				continue // delete, skip for now
+				if err := repo.DeleteRef(update.RefName); err != nil {
+					log.Printf("warning: failed to delete ref %s: %v", update.RefName, err)
+				}
+				continue
 			}
 			hash := plumbing.NewHash(update.NewHash)
-			if err := repo.CreateBranch(update.RefName, hash); err != nil {
+			if err := repo.UpdateRef(update.RefName, hash); err != nil {
 				log.Printf("warning: failed to update ref %s: %v", update.RefName, err)
 			}
 		}

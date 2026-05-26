@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
+	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/lakshmanpatel/gitant/internal/storage"
@@ -24,6 +28,11 @@ func setupTestRegistry(t *testing.T) *storage.RepositoryRegistry {
 		t.Fatal(err)
 	}
 	return reg
+}
+
+func contextWithIdentity(req *http.Request, did string) *http.Request {
+	ctx := context.WithValue(req.Context(), authMiddleware.IdentityKey, did)
+	return req.WithContext(ctx)
 }
 
 func setupTestIssueStore(t *testing.T) *crdt.IssueStore {
@@ -328,6 +337,104 @@ func TestMergePR(t *testing.T) {
 	}
 }
 
+func TestMergePRMergeCommit(t *testing.T) {
+	reg := setupTestRegistry(t)
+	if _, err := reg.Create("repo", "repo", "", false); err != nil {
+		t.Fatal(err)
+	}
+	gitRepo, err := reg.Open("repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mainBlob, err := gitRepo.CreateBlob([]byte("main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainTree, err := gitRepo.CreateTree([]storage.TreeEntry{
+		{Name: "README", Mode: filemode.Regular, Hash: mainBlob},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainCommit, err := gitRepo.CreateCommit(mainTree, nil, "alice", "init")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gitRepo.CreateBranch("main", mainCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	featureBlob, err := gitRepo.CreateBlob([]byte("feature"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	featureTree, err := gitRepo.CreateTree([]storage.TreeEntry{
+		{Name: "README", Mode: filemode.Regular, Hash: featureBlob},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	featureCommit, err := gitRepo.CreateCommit(featureTree, []plumbing.Hash{mainCommit}, "bob", "feature work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gitRepo.CreateBranch("feature", featureCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	mainBlob2, err := gitRepo.CreateBlob([]byte("main v2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainTree2, err := gitRepo.CreateTree([]storage.TreeEntry{
+		{Name: "README", Mode: filemode.Regular, Hash: mainBlob2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainCommit2, err := gitRepo.CreateCommit(mainTree2, []plumbing.Hash{mainCommit}, "alice", "main advance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gitRepo.UpdateRef("main", mainCommit2); err != nil {
+		t.Fatal(err)
+	}
+
+	store := setupTestPRStore(t)
+	store.Create("repo", "pr-1", "alice", "Feature", "", "feature", "main")
+
+	r := chiRouter()
+	r.Post("/{id}/prs/{prId}/merge", MergePR(store, reg, nil, setupTestWebhookManager(t)))
+
+	req := httptest.NewRequest("POST", "/repo/prs/pr-1/merge", bytes.NewBufferString(`{"merge_method":"merge"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var result map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &result)
+	if result["merge_hash"] == "" {
+		t.Fatalf("expected merge_hash in response, got %v", result)
+	}
+
+	mergedHash, err := gitRepo.GetBranch("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergedCommit, err := gitRepo.GetCommit(mergedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mergedCommit.ParentHashes) != 2 {
+		t.Fatalf("expected merge commit with 2 parents, got %d", len(mergedCommit.ParentHashes))
+	}
+}
+
 // --- Fork Handlers ---
 
 func TestForkRepo(t *testing.T) {
@@ -336,7 +443,7 @@ func TestForkRepo(t *testing.T) {
 	reg.Create("source", "source", "original", false)
 
 	r := chiRouter()
-	r.Post("/{id}/fork", ForkRepo(reg, wm))
+	r.Post("/{id}/fork", ForkRepo(reg, wm, ""))
 
 	body := `{"name":"my-fork"}`
 	req := httptest.NewRequest("POST", "/source/fork", bytes.NewBufferString(body))
@@ -359,13 +466,61 @@ func TestForkRepo(t *testing.T) {
 	}
 }
 
+func TestForkPrivateRepoDenied(t *testing.T) {
+	reg := setupTestRegistry(t)
+	wm := setupTestWebhookManager(t)
+	reg.Create("secret", "secret", "", true)
+
+	r := chiRouter()
+	r.Post("/{id}/fork", ForkRepo(reg, wm, "did:key:server"))
+
+	body := `{"name":"leak-fork"}`
+	req := httptest.NewRequest("POST", "/secret/fork", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestForkInheritsPrivateVisibility(t *testing.T) {
+	reg := setupTestRegistry(t)
+	wm := setupTestWebhookManager(t)
+	serverDID := "did:key:server"
+	reg.Create("secret", "secret", "", true)
+
+	r := chiRouter()
+	r.Post("/{id}/fork", ForkRepo(reg, wm, serverDID))
+
+	body := `{"name":"secret-fork"}`
+	req := httptest.NewRequest("POST", "/secret/fork", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = contextWithIdentity(req, serverDID)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entry, err := reg.GetEntry("secret-fork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !entry.Private {
+		t.Fatal("expected fork to inherit private visibility")
+	}
+}
+
 func TestForkRepoMissingName(t *testing.T) {
 	reg := setupTestRegistry(t)
 	wm := setupTestWebhookManager(t)
 	reg.Create("source", "source", "", false)
 
 	r := chiRouter()
-	r.Post("/{id}/fork", ForkRepo(reg, wm))
+	r.Post("/{id}/fork", ForkRepo(reg, wm, ""))
 
 	body := `{}`
 	req := httptest.NewRequest("POST", "/source/fork", bytes.NewBufferString(body))
@@ -384,7 +539,7 @@ func TestForkRepoNotFound(t *testing.T) {
 	wm := setupTestWebhookManager(t)
 
 	r := chiRouter()
-	r.Post("/{id}/fork", ForkRepo(reg, wm))
+	r.Post("/{id}/fork", ForkRepo(reg, wm, ""))
 
 	body := `{"name":"fork"}`
 	req := httptest.NewRequest("POST", "/nonexistent/fork", bytes.NewBufferString(body))
@@ -405,7 +560,7 @@ func TestForkRepoDuplicate(t *testing.T) {
 	reg.Create("my-fork", "my-fork", "", false)
 
 	r := chiRouter()
-	r.Post("/{id}/fork", ForkRepo(reg, wm))
+	r.Post("/{id}/fork", ForkRepo(reg, wm, ""))
 
 	body := `{"name":"my-fork"}`
 	req := httptest.NewRequest("POST", "/source/fork", bytes.NewBufferString(body))

@@ -468,9 +468,19 @@ func ListRefs(registry *storage.RepositoryRegistry) http.HandlerFunc {
 }
 
 // ForkRepo forks a repository
-func ForkRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http.HandlerFunc {
+func ForkRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager, serverDID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sourceID := chi.URLParam(r, "id")
+
+		sourceEntry, err := registry.GetEntry(sourceID)
+		if err != nil {
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
+			return
+		}
+		if sourceEntry.Private && !CanAccessRepo(r, sourceEntry, serverDID) {
+			http.Error(w, "Repository not found", http.StatusNotFound)
+			return
+		}
 
 		var req struct {
 			Name string `json:"name"`

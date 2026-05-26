@@ -1,0 +1,51 @@
+# Run from a checkout with gitant-daemon and gitant-web as siblings.
+# docker compose -f docker-compose.prod.yml up --build
+#
+# Set GITANT_DOMAIN to your public hostname for Let's Encrypt TLS.
+
+services:
+  daemon:
+    build: .
+    expose:
+      - "7777"
+    volumes:
+      - gitant-data:/home/gitant/.gitant
+    environment:
+      GITANT_PORT: "7777"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:7777/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    build: ../gitant-web
+    expose:
+      - "3000"
+    environment:
+      NEXT_PUBLIC_DAEMON_URL: http://daemon:7777
+    depends_on:
+      daemon:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      GITANT_DOMAIN: ${GITANT_DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-internal@localhost}
+    volumes:
+      - ./deploy/caddy/Caddyfile.docker:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+      - daemon
+
+volumes:
+  gitant-data:
+  caddy-data:
+  caddy-config:

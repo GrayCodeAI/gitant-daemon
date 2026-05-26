@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 )
 
 func TestInitRepository(t *testing.T) {
@@ -119,5 +122,79 @@ func TestBranchOperations(t *testing.T) {
 	_, err = repo.GetBranch("main")
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestMergeBranchesCreatesMergeCommit(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "gitant-merge-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	repo, err := InitRepository(filepath.Join(tmpDir, "repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mainBlob, err := repo.CreateBlob([]byte("main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainTree, err := repo.CreateTree([]TreeEntry{{Name: "README", Mode: filemode.Regular, Hash: mainBlob}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainCommit, err := repo.CreateCommit(mainTree, nil, "alice", "init")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateBranch("main", mainCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	featureBlob, err := repo.CreateBlob([]byte("feature"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	featureTree, err := repo.CreateTree([]TreeEntry{{Name: "README", Mode: filemode.Regular, Hash: featureBlob}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	featureCommit, err := repo.CreateCommit(featureTree, []plumbing.Hash{mainCommit}, "bob", "feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateBranch("feature", featureCommit); err != nil {
+		t.Fatal(err)
+	}
+
+	mainBlob2, err := repo.CreateBlob([]byte("main v2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainTree2, err := repo.CreateTree([]TreeEntry{{Name: "README", Mode: filemode.Regular, Hash: mainBlob2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainCommit2, err := repo.CreateCommit(mainTree2, []plumbing.Hash{mainCommit}, "alice", "main advance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateRef("main", mainCommit2); err != nil {
+		t.Fatal(err)
+	}
+
+	mergeHash, err := repo.MergeBranches("main", "feature", "carol", "merge", "merge")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	merged, err := repo.GetCommit(mergeHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.ParentHashes) != 2 {
+		t.Fatalf("expected 2 parents, got %d", len(merged.ParentHashes))
 	}
 }

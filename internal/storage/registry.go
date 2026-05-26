@@ -252,6 +252,7 @@ func (r *RepositoryRegistry) Fork(sourceID, forkID, owner string) (*RepoEntry, e
 		ID:         forkID,
 		Name:       forkID,
 		Path:       forkPath,
+		Private:    sourceEntry.Private,
 		CreatedAt:  time.Now().Format(time.RFC3339),
 		ForkedFrom: sourceID,
 	}

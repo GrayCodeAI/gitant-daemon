@@ -1,0 +1,33 @@
+# Docker Compose Caddy config — uses service names from docker-compose.prod.yml
+{
+	email {$ACME_EMAIL}
+}
+
+{$GITANT_DOMAIN} {
+	encode gzip
+
+	header {
+		X-Frame-Options DENY
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# Daemon API and git smart HTTP
+	handle /api/* {
+		reverse_proxy daemon:7777
+	}
+
+	handle /health {
+		reverse_proxy daemon:7777
+	}
+
+	handle /metrics {
+		reverse_proxy daemon:7777
+	}
+
+	# Next.js dashboard
+	handle {
+		reverse_proxy web:3000
+	}
+}
