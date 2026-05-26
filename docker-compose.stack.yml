@@ -1,6 +1,8 @@
+# Run from a checkout with gitant-daemon and gitant-web as sibling directories
+# (e.g. gitant-core/). From monorepo root: docker compose -f gitant-daemon/docker-compose.stack.yml up
 services:
   daemon:
-    build: ./gitant-daemon
+    build: .
     ports:
       - "7777:7777"
     volumes:
@@ -15,7 +17,7 @@ services:
       start_period: 10s
 
   web:
-    build: ./gitant-web
+    build: ../gitant-web
     ports:
       - "3303:3000"
     environment:

@@ -160,7 +160,17 @@ func (s *Server) setupMiddleware() {
 	}))
 	s.router.Use(authMiddleware.SecurityHeaders)
 	s.router.Use(authMiddleware.NewHTTPSignatureMiddleware(s.revocations, s.identity.DID))
+	s.router.Use(s.recordAgentActivity)
 	s.router.Use(s.rateLimiter.Middleware)
+}
+
+func (s *Server) recordAgentActivity(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if did := authMiddleware.GetIdentity(r); did != "" {
+			s.agents.Record(did)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) setupRoutes() {
