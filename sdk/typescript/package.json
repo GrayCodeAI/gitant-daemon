@@ -1,0 +1,25 @@
+{
+  "name": "@gitant/sdk",
+  "version": "0.2.0",
+  "description": "TypeScript SDK for Gitant API",
+  "main": "dist/client.js",
+  "types": "dist/client.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "gitant",
+    "git",
+    "sdk",
+    "api"
+  ],
+  "author": "GrayCodeAI",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

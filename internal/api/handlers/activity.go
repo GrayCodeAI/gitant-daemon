@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 	"time"
@@ -10,143 +9,93 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 )
 
-// ActivityEvent represents a single activity event
+// ActivityEvent represents an activity event
 type ActivityEvent struct {
-	Type      string    `json:"type"`
-	Repo      string    `json:"repo"`
-	Actor     string    `json:"actor"`
-	Summary   string    `json:"summary"`
-	Timestamp time.Time `json:"timestamp"`
+	Type      string      `json:"type"`
+	RepoID    string      `json:"repo_id"`
+	Actor     string      `json:"actor"`
+	Timestamp time.Time   `json:"timestamp"`
+	Data      interface{} `json:"data"`
 }
 
-// GetActivity returns a unified activity feed across all repos
-func GetActivity(issues *crdt.IssueStore, prs *crdt.PullRequestStore, tasks *crdt.TaskStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		offset, limit := ParsePagination(r)
+// ActivityFeed combines all events into a unified feed
+type ActivityFeed struct {
+	issues   *crdt.IssueStore
+	prs      *crdt.PullRequestStore
+	tasks    *crdt.TaskStore
+	releases *crdt.ReleaseStore
+}
 
-		events := make([]ActivityEvent, 0)
-
-		// Aggregate from issues
-		for repoID, repoIssues := range issues.All() {
-			for _, issue := range repoIssues {
-				for _, op := range issue.Log().Operations() {
-					events = append(events, ActivityEvent{
-						Type:      "issue." + string(op.Type),
-						Repo:      repoID,
-						Actor:     op.Author,
-						Summary:   summarizeIssueOp(*op, issue.Title),
-						Timestamp: op.Timestamp,
-					})
-				}
-			}
-		}
-
-		// Aggregate from PRs
-		for repoID, repoPRs := range prs.All() {
-			for _, pr := range repoPRs {
-				for _, op := range pr.Log().Operations() {
-					events = append(events, ActivityEvent{
-						Type:      "pr." + string(op.Type),
-						Repo:      repoID,
-						Actor:     op.Author,
-						Summary:   summarizePROp(*op, pr.Title),
-						Timestamp: op.Timestamp,
-					})
-				}
-			}
-		}
-
-		// Aggregate from tasks
-		for repoID, repoTasks := range tasks.All() {
-			for _, task := range repoTasks {
-				events = append(events, ActivityEvent{
-					Type:      "task.created",
-					Repo:      repoID,
-					Actor:     task.CreatedBy,
-					Summary:   "Created task: " + task.Title,
-					Timestamp: task.CreatedAt,
-				})
-				if task.ClaimedAt != nil {
-					events = append(events, ActivityEvent{
-						Type:      "task.claimed",
-						Repo:      repoID,
-						Actor:     task.ClaimedBy,
-						Summary:   "Claimed task: " + task.Title,
-						Timestamp: *task.ClaimedAt,
-					})
-				}
-				if task.CompletedAt != nil {
-					events = append(events, ActivityEvent{
-						Type:      "task.completed",
-						Repo:      repoID,
-						Actor:     task.ClaimedBy,
-						Summary:   "Completed task: " + task.Title,
-						Timestamp: *task.CompletedAt,
-					})
-				}
-			}
-		}
-
-		// Sort by timestamp descending
-		sort.Slice(events, func(i, j int) bool {
-			return events[i].Timestamp.After(events[j].Timestamp)
-		})
-
-		paged, total := PaginateSlice(events, offset, limit)
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"events": paged,
-			"total":  total,
-			"offset": offset,
-			"limit":  limit,
-		})
+// NewActivityFeed creates a new activity feed
+func NewActivityFeed(issues *crdt.IssueStore, prs *crdt.PullRequestStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore) *ActivityFeed {
+	return &ActivityFeed{
+		issues:   issues,
+		prs:      prs,
+		tasks:    tasks,
+		releases: releases,
 	}
 }
 
-func summarizeIssueOp(op crdt.Operation, title string) string {
-	switch op.Type {
-	case crdt.OpCreate:
-		return "Created issue: " + title
-	case crdt.OpSetStatus:
-		if status, ok := op.Data["status"]; ok {
-			return "Changed status to " + fmt.Sprintf("%v", status) + " on issue: " + title
-		}
-		return "Updated issue status: " + title
-	case crdt.OpAddComment:
-		return "Commented on issue: " + title
-	case crdt.OpAddLabel:
-		if label, ok := op.Data["label"]; ok {
-			return "Added label '" + fmt.Sprintf("%v", label) + "' to issue: " + title
-		}
-		return "Added label to issue: " + title
-	case crdt.OpRemoveLabel:
-		if label, ok := op.Data["label"]; ok {
-			return "Removed label '" + fmt.Sprintf("%v", label) + "' from issue: " + title
-		}
-		return "Removed label from issue: " + title
-	default:
-		return "Updated issue: " + title
-	}
-}
+// GetActivity returns the activity feed
+func (f *ActivityFeed) GetActivity(w http.ResponseWriter, r *http.Request) {
+	events := make([]ActivityEvent, 0)
 
-func summarizePROp(op crdt.Operation, title string) string {
-	switch op.Type {
-	case crdt.OpCreate:
-		return "Opened PR: " + title
-	case crdt.OpSetStatus:
-		if status, ok := op.Data["status"]; ok {
-			return "Changed status to " + fmt.Sprintf("%v", status) + " on PR: " + title
+	// Collect issue events
+	allIssues := f.issues.All()
+	for repoID, issues := range allIssues {
+		for _, issue := range issues {
+			events = append(events, ActivityEvent{
+				Type:      "issue." + string(issue.Status),
+				RepoID:    repoID,
+				Actor:     issue.Author,
+				Timestamp: issue.UpdatedAt,
+				Data: map[string]interface{}{
+					"id":     issue.ID,
+					"title":  issue.Title,
+					"status": issue.Status,
+				},
+			})
 		}
-		return "Updated PR status: " + title
-	case crdt.OpAddComment:
-		return "Commented on PR: " + title
-	case crdt.OpAddLabel:
-		if label, ok := op.Data["label"]; ok {
-			return "Added label '" + fmt.Sprintf("%v", label) + "' to PR: " + title
-		}
-		return "Added label to PR: " + title
-	default:
-		return "Updated PR: " + title
 	}
+
+	// Collect PR events
+	allPRs := f.prs.All()
+	for repoID, prs := range allPRs {
+		for _, pr := range prs {
+			events = append(events, ActivityEvent{
+				Type:      "pr." + string(pr.Status),
+				RepoID:    repoID,
+				Actor:     pr.Author,
+				Timestamp: pr.UpdatedAt,
+				Data: map[string]interface{}{
+					"id":     pr.ID,
+					"title":  pr.Title,
+					"status": pr.Status,
+				},
+			})
+		}
+	}
+
+	// Sort by timestamp descending
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp.After(events[j].Timestamp)
+	})
+
+	// Apply pagination
+	offset, limit := ParsePagination(r)
+	if offset >= len(events) {
+		events = []ActivityEvent{}
+	} else {
+		end := offset + limit
+		if end > len(events) {
+			end = len(events)
+		}
+		events = events[offset:end]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"events": events,
+		"total":  len(events),
+	})
 }

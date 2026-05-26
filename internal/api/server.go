@@ -19,7 +19,10 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/lakshmanpatel/gitant/internal/network"
+	"github.com/lakshmanpatel/gitant/internal/runner"
 	"github.com/lakshmanpatel/gitant/internal/storage"
+	"github.com/lakshmanpatel/gitant/internal/store"
+	ws "github.com/lakshmanpatel/gitant/internal/websocket"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
@@ -68,6 +71,10 @@ type Server struct {
 	network     *network.Node
 	sync        *network.SyncCoordinator
 	pinner      network.ObjectPinner
+	authService *store.AuthService
+	reviewStore store.ReviewCommentStore
+	runner      *runner.Runner
+	wsHub       *ws.Hub
 }
 
 func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string, corsOrigins []string) *Server {
@@ -89,10 +96,15 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 		rateLimiter: authMiddleware.NewRateLimiter(100), // 100 req/min
 		corsOrigins: corsOrigins,
 		startTime:   time.Now(),
+		runner:      runner.NewRunner(dataDir),
+		wsHub:       ws.NewHub(),
 	}
 
 	s.setupMiddleware()
 	s.setupRoutes()
+
+	// Start WebSocket hub
+	go s.wsHub.Run()
 
 	// Load persisted agent registry
 	if err := s.agents.Load(); err != nil {
@@ -168,6 +180,16 @@ func (s *Server) SetNetwork(node *network.Node, pinner network.ObjectPinner) {
 			}
 		}
 	})
+}
+
+// SetAuthService sets the auth service for user authentication
+func (s *Server) SetAuthService(auth *store.AuthService) {
+	s.authService = auth
+}
+
+// SetReviewStore sets the review comment store
+func (s *Server) SetReviewStore(reviewStore store.ReviewCommentStore) {
+	s.reviewStore = reviewStore
 }
 
 func requestLogger(next http.Handler) http.Handler {
@@ -328,7 +350,8 @@ func (s *Server) setupRoutes() {
 	})
 
 	// Activity feed (public)
-	s.router.Get("/api/v1/activity", handlers.GetActivity(s.issues, s.prs, s.tasks))
+	activityFeed := handlers.NewActivityFeed(s.issues, s.prs, s.tasks, s.releases)
+	s.router.Get("/api/v1/activity", activityFeed.GetActivity)
 
 	// Agent endpoints
 	s.router.Route("/api/v1/agents", func(r chi.Router) {
@@ -367,6 +390,80 @@ func (s *Server) setupRoutes() {
 			r.Post("/revoke", handlers.RevokeUCAN(s.revocations))
 		})
 	})
+
+	// Auth endpoints
+	if s.authService != nil {
+		authHandler := handlers.NewAuthHandler(s.authService)
+		s.router.Post("/api/v1/auth/register", authHandler.Register)
+		s.router.Post("/api/v1/auth/login", authHandler.Login)
+		s.router.Post("/api/v1/auth/logout", authHandler.Logout)
+
+		s.router.Group(func(r chi.Router) {
+			r.Use(authMiddleware.SessionAuthMiddleware(s.authService))
+			r.Get("/api/v1/auth/profile", authHandler.GetProfile)
+		})
+
+		userHandler := handlers.NewUserHandler(s.authService.Users)
+		s.router.Get("/api/v1/users", userHandler.ListUsers)
+		s.router.Get("/api/v1/users/{id}", userHandler.GetUser)
+	}
+
+	// Review comment endpoints
+	if s.reviewStore != nil {
+		reviewHandler := handlers.NewReviewHandler(s.reviewStore)
+		s.router.Route("/api/v1/repos/{id}/prs/{prId}/review", func(r chi.Router) {
+			r.Get("/", reviewHandler.ListComments)
+			r.Group(func(r chi.Router) {
+				r.Use(authMiddleware.RequireIdentity)
+				r.Post("/", reviewHandler.CreateComment)
+			})
+		})
+		s.router.Post("/api/v1/review-comments/{commentId}/resolve", reviewHandler.ResolveComment)
+		s.router.Delete("/api/v1/review-comments/{commentId}", reviewHandler.DeleteComment)
+	}
+
+	// Actions/CI endpoints
+	actionsHandler := handlers.NewActionsHandler(s.runner)
+	s.router.Get("/api/v1/actions/runs", actionsHandler.ListRuns)
+	s.router.Get("/api/v1/actions/runs/{runId}", actionsHandler.GetRun)
+
+	// Import/Export endpoints
+	importHandler := handlers.NewImportHandler(s.repos, s.issues, s.prs, s.webhooks)
+	s.router.Post("/api/v1/import", importHandler.Import)
+	s.router.Post("/api/v1/export", importHandler.Export)
+	s.router.Post("/api/v1/import/github", importHandler.GitHubImport)
+	s.router.Post("/api/v1/import/gitlab", importHandler.GitLabImport)
+
+	// Batch operations
+	batchHandler := handlers.NewBatchHandler(s.issues, s.prs, s.webhooks)
+	s.router.Post("/api/v1/batch", batchHandler.Execute)
+
+	// OpenAPI spec
+	s.router.Get("/api/v1/openapi.json", handlers.HandleOpenAPI)
+
+	// WebSocket endpoint
+	if s.authService != nil {
+		s.router.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
+			user := authMiddleware.GetUser(r)
+			userID := ""
+			if user != nil {
+				userID = user.ID
+			}
+			ws.HandleWebSocket(s.wsHub, userID)(w, r)
+		})
+	}
+
+	// Package endpoints
+	// (placeholder - requires package registry initialization)
+
+	// Wiki endpoints
+	// (placeholder - requires wiki initialization)
+
+	// Notification endpoints
+	// (placeholder - requires notification manager initialization)
+
+	// LFS endpoints
+	// (placeholder - requires LFS store initialization)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
