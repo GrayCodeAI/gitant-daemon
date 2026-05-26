@@ -1,10 +1,27 @@
-# gitant
+# gitant-daemon
 
-Decentralized Git hosting for solo developers and AI agents.
+Server for [Gitant](https://github.com/GrayCodeAI/gitant-daemon) — decentralized Git hosting for solo developers and AI agents.
+
+**Developers:** install the CLI from [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli) (push, issues, PRs).  
+**Operators:** run this repo (`gitant serve`) or Docker.  
+**Browser:** use [`gitant-web`](https://github.com/GrayCodeAI/gitant-web).
 
 ## Quick Start
 
-### Docker (recommended)
+### For developers (CLI)
+
+Install the client and point it at your node:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GrayCodeAI/gitant-cli/main/scripts/install.sh | bash
+export GITANT_DAEMON_URL=http://localhost:7777
+gitant doctor
+gitant repo list
+```
+
+See the [gitant-cli README](https://github.com/GrayCodeAI/gitant-cli) for all commands.
+
+### Run the server (Docker — recommended)
 
 ```bash
 git clone https://github.com/GrayCodeAI/gitant-daemon.git
@@ -14,22 +31,23 @@ docker compose up -d
 
 Your node is running at `http://localhost:7777`.
 
-### Install a release
+### Install daemon release
 
-**Pre-built binaries** — [GitHub Releases](https://github.com/GrayCodeAI/gitant-daemon/releases):
+**Pre-built server binary** — [GitHub Releases](https://github.com/GrayCodeAI/gitant-daemon/releases):
 
 ```bash
 # macOS (Apple Silicon example)
 curl -LO https://github.com/GrayCodeAI/gitant-daemon/releases/latest/download/gitant-daemon_<version>_Darwin_arm64.tar.gz
 tar xzf gitant-daemon_*_Darwin_arm64.tar.gz
-sudo mv gitant git-remote-gitant /usr/local/bin/
+sudo mv gitant /usr/local/bin/   # provides `gitant serve`
 ```
+
+For push/pull/clone and API commands, also install [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli).
 
 **Go install** (requires Go 1.26+):
 
 ```bash
 go install github.com/lakshmanpatel/gitant/cmd/gitant@v0.1.0
-go install github.com/lakshmanpatel/gitant/cmd/git-remote-gitant@v0.1.0
 ```
 
 **Container** (published on tag push):
@@ -42,7 +60,7 @@ docker run -p 7777:7777 -v gitant-data:/home/gitant/.gitant ghcr.io/graycodeai/g
 Check the running version:
 
 ```bash
-gitant version
+gitant serve --help
 curl -s http://localhost:7777/api/v1/status | jq .version
 ```
 
@@ -52,22 +70,24 @@ Requires Go 1.26+.
 
 ```bash
 make build
-make run
+make run    # starts gitant serve
 ```
 
 Or manually:
 
 ```bash
 go build -o bin/gitant ./cmd/gitant/
-go build -o bin/git-remote-gitant ./cmd/git-remote-gitant/
-
 ./bin/gitant serve
 ```
 
+Install the CLI separately from [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli) for `push`, `issue`, `pr`, etc.
+
 ### First repo
 
+With [gitant-cli](https://github.com/GrayCodeAI/gitant-cli) installed and the daemon running:
+
 ```bash
-# Create a repo
+# Create a repo (API or web UI)
 curl -X POST http://localhost:7777/api/v1/repos \
   -H 'Content-Type: application/json' \
   -d '{"name":"my-project","description":"Hello world"}'
@@ -75,15 +95,16 @@ curl -X POST http://localhost:7777/api/v1/repos \
 # Init locally and push
 mkdir my-project && cd my-project
 git init && git add . && git commit -m "init"
-./bin/gitant push --remote http://localhost:7777 --repo my-project
+gitant push --remote http://localhost:7777 --repo my-project
 
 # Clone elsewhere
-./bin/gitant clone my-project --remote http://localhost:7777 ./my-project-clone
+gitant clone my-project --remote http://localhost:7777 ./my-project-clone
 ```
 
 ## Architecture
 
 ```
+gitant-cli (Go)            Developer CLI — push/pull, issues, PRs, agents
 gitant-daemon (Go)
 ├── HTTP API (go-chi)     REST endpoints for repos, issues, PRs, files, commits
 ├── P2P Networking         libp2p (DHT + GossipSub + mDNS)
@@ -93,15 +114,22 @@ gitant-daemon (Go)
 ├── Observability          slog structured logging + Prometheus /metrics
 └── Security               Rate limiting, input validation, TLS support
 
-gitant-mcp (TypeScript)    MCP server for AI agent integration (52 tools)
-gitant-web (Next.js)       Web frontend (18 routes, paginated, responsive)
+gitant-mcp (TypeScript)    MCP server for AI agent integration (64 tools)
+gitant-web (Next.js)       Web frontend (dashboard, issues, PRs)
 ```
 
 ## CLI Reference
 
+Server command (this repo):
+
 | Command | Description |
 |---------|-------------|
 | `gitant serve [--port P] [--data-dir D] [--tls-cert F] [--tls-key F] [--p2p] [--p2p-listen ADDR] [--p2p-mdns] [--bootstrap-peers ...]` | Start the daemon |
+
+Client commands live in [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli): `push`, `pull`, `clone`, `issue`, `pr`, `task`, `agent`, `doctor`, `backup`, and more.
+
+| Command | Description |
+|---------|-------------|
 | `gitant init` | Initialize a local repo |
 | `gitant push --repo <id> --remote <url>` | Push to daemon (packfile) |
 | `gitant pull --repo <id> --remote <url>` | Pull from daemon |
