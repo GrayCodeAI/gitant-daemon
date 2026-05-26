@@ -33,4 +33,4 @@ Build injects version into `internal/api` via `-ldflags`:
 - `gitant version` CLI
 - `GET /api/v1/status` → `"version"`
 
-No npm involved — this is a Go binary distribution only.
+Goreleaser uses `Dockerfile.goreleaser` (copies pre-built binaries). Local/CI builds use `Dockerfile` (compiles from source).

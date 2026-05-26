@@ -1,0 +1,15 @@
+# Used by GoReleaser — build context contains pre-built binaries only.
+FROM alpine:3.20
+RUN apk add --no-cache git ca-certificates wget && \
+    adduser -D -u 1000 gitant
+COPY gitant /usr/local/bin/gitant
+COPY git-remote-gitant /usr/local/bin/git-remote-gitant
+RUN mkdir -p /home/gitant/.gitant && chown -R gitant:gitant /home/gitant
+USER gitant
+WORKDIR /home/gitant
+EXPOSE 7777
+VOLUME ["/home/gitant/.gitant"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget --spider -q http://localhost:7777/health || exit 1
+ENTRYPOINT ["gitant"]
+CMD ["serve"]
