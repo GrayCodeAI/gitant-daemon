@@ -207,7 +207,9 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 
 		// Store objects
 		var errors []string
+		objectHashes := make([]string, 0, len(req.Objects))
 		for _, obj := range req.Objects {
+			objectHashes = append(objectHashes, obj.Hash)
 			hash := plumbing.NewHash(obj.Hash)
 			content, err := base64.StdEncoding.DecodeString(obj.Content)
 			if err != nil {
@@ -249,19 +251,13 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 				"errors":  errors,
 			})
 		} else {
-			// Dispatch push webhook event
-			refNames := make([]string, 0, len(req.RefUpdates))
-			for _, u := range req.RefUpdates {
-				refNames = append(refNames, u.Name)
+			refHeads := make(map[string]string)
+			for _, update := range req.RefUpdates {
+				if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
+					refHeads[update.Name] = update.NewHash
+				}
 			}
-			wm.Dispatch(webhooks.Event{
-				Type: webhooks.EventPush,
-				Repo: id,
-				Data: map[string]interface{}{
-					"refs":    refNames,
-					"objects": len(req.Objects),
-				},
-			})
+			dispatchPushEvent(wm, id, objectHashes, refHeads)
 
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": true,
@@ -315,6 +311,7 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 		}
 
 		// Decode and ingest packfile
+		objectHashes := make([]string, 0)
 		if req.Packfile != "" {
 			packData, err := base64.StdEncoding.DecodeString(req.Packfile)
 			if err != nil {
@@ -329,6 +326,7 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 			}
 
 			for _, obj := range objects {
+				objectHashes = append(objectHashes, obj.Hash.String())
 				if err := repo.StoreObject(obj.Hash, obj.Type, obj.Content); err != nil {
 					log.Printf("warning: failed to store object %s: %v", obj.Hash, err)
 				}
@@ -347,18 +345,13 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 			}
 		}
 
-		// Dispatch push webhook event
-		refNames := make([]string, 0, len(req.RefUpdates))
-		for _, u := range req.RefUpdates {
-			refNames = append(refNames, u.Name)
+		refHeads := make(map[string]string)
+		for _, update := range req.RefUpdates {
+			if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
+				refHeads[update.Name] = update.NewHash
+			}
 		}
-		wm.Dispatch(webhooks.Event{
-			Type: webhooks.EventPush,
-			Repo: id,
-			Data: map[string]interface{}{
-				"refs": refNames,
-			},
-		})
+		dispatchPushEvent(wm, id, objectHashes, refHeads)
 
 		w.Header().Set("Content-Type", "application/json")
 		if len(errors) > 0 {

@@ -91,6 +91,24 @@ func (l *OperationLog) Add(op *Operation) {
 	l.operations = append(l.operations, op)
 }
 
+// Observe updates the clock if n is greater than the current value.
+func (c *LamportClock) Observe(n uint64) {
+	if n > c.counter {
+		c.counter = n
+	}
+}
+
+// ImportOperation appends an operation without reassigning its Lamport timestamp.
+func (l *OperationLog) ImportOperation(op *Operation) {
+	for _, existing := range l.operations {
+		if existing.ID == op.ID {
+			return
+		}
+	}
+	l.operations = append(l.operations, op)
+	l.clock.Observe(op.Lamport)
+}
+
 // Operations returns all operations
 func (l *OperationLog) Operations() []*Operation {
 	return l.operations

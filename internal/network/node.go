@@ -59,6 +59,7 @@ type Node struct {
 	cancel          context.CancelFunc
 	remoteEvents    []FederatedEvent
 	subscription    *Subscription
+	onFederatedEvent func(FederatedEvent)
 }
 
 // RepoEventTopic returns the GossipSub topic for a repository.
@@ -173,6 +174,10 @@ func (n *Node) startEventSubscriber() error {
 				n.remoteEvents = n.remoteEvents[len(n.remoteEvents)-maxRemoteEvents:]
 			}
 			n.mu.Unlock()
+
+			if n.onFederatedEvent != nil {
+				n.onFederatedEvent(event)
+			}
 
 			slog.Info("federated event received",
 				"type", event.Type,
@@ -410,6 +415,14 @@ func (n *Node) RemoteEvents(limit int) []FederatedEvent {
 	out := make([]FederatedEvent, limit)
 	copy(out, n.remoteEvents[len(n.remoteEvents)-limit:])
 	return out
+}
+
+// SetFederatedEventHandler registers a callback for incoming federated events.
+func (n *Node) SetFederatedEventHandler(fn func(FederatedEvent)) {
+	if n == nil {
+		return
+	}
+	n.onFederatedEvent = fn
 }
 
 // Close shuts down gossip, DHT, and the libp2p host.

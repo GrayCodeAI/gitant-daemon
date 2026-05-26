@@ -451,6 +451,12 @@ func (r *Repository) GetObject(hash plumbing.Hash) (plumbing.ObjectType, []byte,
 	return obj.Type(), buf, nil
 }
 
+// HasObject reports whether a git object exists in the repository.
+func (r *Repository) HasObject(hash plumbing.Hash) bool {
+	_, err := r.repo.Storer.EncodedObject(plumbing.AnyObject, hash)
+	return err == nil
+}
+
 // ListAllRefs returns all references with their names and hashes
 type RefInfo struct {
 	Name string `json:"name"`

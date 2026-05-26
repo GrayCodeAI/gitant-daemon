@@ -161,6 +161,24 @@ func (s *IssueStore) Update(repoID, issueID string, fn func(*Issue) error) error
 	return s.saveLocked()
 }
 
+// MergeRemote merges a remote issue snapshot into the local store.
+func (s *IssueStore) MergeRemote(repoID string, remote *Issue) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.issues[repoID]; !ok {
+		s.issues[repoID] = make(map[string]*Issue)
+	}
+
+	if local, ok := s.issues[repoID][remote.ID]; ok {
+		local.Merge(remote)
+	} else {
+		issueCopy := *remote
+		s.issues[repoID][remote.ID] = &issueCopy
+	}
+	return s.saveLocked()
+}
+
 // All returns deep copies of all issues across all repositories
 func (s *IssueStore) All() map[string]map[string]*Issue {
 	s.mu.RLock()

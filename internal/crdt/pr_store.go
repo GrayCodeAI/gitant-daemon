@@ -161,6 +161,24 @@ func (s *PullRequestStore) Update(repoID, prID string, fn func(*PullRequest) err
 	return s.saveLocked()
 }
 
+// MergeRemote merges a remote pull request snapshot into the local store.
+func (s *PullRequestStore) MergeRemote(repoID string, remote *PullRequest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.prs[repoID]; !ok {
+		s.prs[repoID] = make(map[string]*PullRequest)
+	}
+
+	if local, ok := s.prs[repoID][remote.ID]; ok {
+		local.Merge(remote)
+	} else {
+		prCopy := *remote
+		s.prs[repoID][remote.ID] = &prCopy
+	}
+	return s.saveLocked()
+}
+
 // All returns deep copies of all pull requests across all repositories
 func (s *PullRequestStore) All() map[string]map[string]*PullRequest {
 	s.mu.RLock()

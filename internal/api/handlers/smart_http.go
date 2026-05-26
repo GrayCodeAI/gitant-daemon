@@ -165,10 +165,14 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 		}
 
 		// Ingest packfile if present
+		objectHashes := make([]string, 0)
 		if packStart >= 0 {
 			packData := strings.Join(lines[packStart:], "")
-			if err := ingestPackfile(repo, []byte(packData)); err != nil {
+			hashes, err := ingestPackfile(repo, []byte(packData))
+			if err != nil {
 				log.Printf("error ingesting packfile: %v", err)
+			} else {
+				objectHashes = hashes
 			}
 		}
 
@@ -198,18 +202,13 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 		response.WriteString(git.FlushPacket())
 		w.Write([]byte(response.String()))
 
-		// Dispatch push webhook event
-		refNames := make([]string, 0, len(updates))
-		for _, u := range updates {
-			refNames = append(refNames, u.RefName)
+		refHeads := make(map[string]string)
+		for _, update := range updates {
+			if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
+				refHeads[update.RefName] = update.NewHash
+			}
 		}
-		wm.Dispatch(webhooks.Event{
-			Type: webhooks.EventPush,
-			Repo: id,
-			Data: map[string]interface{}{
-				"refs": refNames,
-			},
-		})
+		dispatchPushEvent(wm, id, objectHashes, refHeads)
 	}
 }
 
@@ -337,20 +336,21 @@ func generatePackfile(repo *storage.Repository, objects []plumbing.Hash) ([]byte
 }
 
 // ingestPackfile reads a packfile and stores its objects into the repository.
-// Uses go-git's parser for proper zlib decompression and delta resolution.
-func ingestPackfile(repo *storage.Repository, data []byte) error {
+func ingestPackfile(repo *storage.Repository, data []byte) ([]string, error) {
 	objects, err := storage.ExtractObjects(data)
 	if err != nil {
-		return fmt.Errorf("extracting packfile objects: %w", err)
+		return nil, fmt.Errorf("extracting packfile objects: %w", err)
 	}
 
+	hashes := make([]string, 0, len(objects))
 	for _, obj := range objects {
+		hashes = append(hashes, obj.Hash.String())
 		if err := repo.StoreObject(obj.Hash, obj.Type, obj.Content); err != nil {
 			log.Printf("warning: failed to store object %s: %v", obj.Hash, err)
 		}
 	}
 
-	return nil
+	return hashes, nil
 }
 
 // sidebandWriter writes data in git side-band format

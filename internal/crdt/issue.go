@@ -242,7 +242,7 @@ func (i *Issue) Merge(other *Issue) {
 	// Add only new operations from other
 	for _, op := range other.log.Operations() {
 		if !existingIDs[op.ID] {
-			i.log.Add(op)
+			i.log.ImportOperation(op)
 		}
 	}
 

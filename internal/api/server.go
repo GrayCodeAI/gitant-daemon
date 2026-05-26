@@ -66,6 +66,7 @@ type Server struct {
 	corsOrigins []string
 	startTime   time.Time
 	network     *network.Node
+	sync        *network.SyncCoordinator
 }
 
 func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string, corsOrigins []string) *Server {
@@ -100,14 +101,26 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 	return s
 }
 
-// SetNetwork attaches the libp2p node and wires federated event replication.
+// SetNetwork attaches the libp2p node and wires federated replication.
 func (s *Server) SetNetwork(node *network.Node) {
 	s.network = node
-	if node == nil || s.webhooks == nil {
+	if node == nil {
+		return
+	}
+
+	s.sync = network.NewSyncCoordinator(
+		node,
+		newRepoObjectStore(s.repos),
+		newCRDTSyncStore(s.issues, s.prs),
+	)
+
+	if s.webhooks == nil {
 		return
 	}
 
 	s.webhooks.SetEventHook(func(event webhooks.Event) {
+		ctx := context.Background()
+
 		fedEvent := network.FederatedEvent{
 			Type:      string(event.Type),
 			Repo:      event.Repo,
@@ -117,9 +130,38 @@ func (s *Server) SetNetwork(node *network.Node) {
 		if err := node.PublishRepoEvent(event.Repo, fedEvent); err != nil {
 			slog.Warn("failed to publish federated event", "type", event.Type, "repo", event.Repo, "error", err)
 		}
-		if event.Type == webhooks.EventPush {
-			ref, _ := event.Data["ref"].(string)
-			node.ProvideRepoHead(context.Background(), event.Repo, ref)
+
+		switch event.Type {
+		case webhooks.EventPush:
+			hashes := network.ParseObjectHashes(event.Data)
+			s.sync.AnnouncePushObjects(ctx, event.Repo, hashes)
+			for _, head := range network.ParseRefHeads(event.Data) {
+				node.ProvideRepoHead(ctx, event.Repo, head)
+			}
+		case webhooks.EventIssueCreated, webhooks.EventIssueClosed, webhooks.EventIssueCommented:
+			issueID, _ := event.Data["issue_id"].(string)
+			if issueID == "" {
+				return
+			}
+			issue, err := s.issues.Get(event.Repo, issueID)
+			if err != nil {
+				return
+			}
+			if err := s.sync.PublishIssue(event.Repo, issue); err != nil {
+				slog.Warn("failed to publish issue CRDT", "repo", event.Repo, "issue", issueID, "error", err)
+			}
+		case webhooks.EventPROpened, webhooks.EventPRMerged, webhooks.EventPRReviewed:
+			prID, _ := event.Data["pr_id"].(string)
+			if prID == "" {
+				return
+			}
+			pr, err := s.prs.Get(event.Repo, prID)
+			if err != nil {
+				return
+			}
+			if err := s.sync.PublishPR(event.Repo, pr); err != nil {
+				slog.Warn("failed to publish PR CRDT", "repo", event.Repo, "pr", prID, "error", err)
+			}
 		}
 	})
 }

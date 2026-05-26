@@ -299,7 +299,7 @@ func (pr *PullRequest) Merge(other *PullRequest) {
 	// Add only new operations from other
 	for _, op := range other.log.Operations() {
 		if !existingIDs[op.ID] {
-			pr.log.Add(op)
+			pr.log.ImportOperation(op)
 		}
 	}
 

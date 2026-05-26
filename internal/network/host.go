@@ -9,7 +9,9 @@ import (
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
+	p2pnetwork "github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -110,6 +112,16 @@ func (h *Host) ID() peer.ID {
 // Addrs returns the host's listen addresses
 func (h *Host) Addrs() []multiaddr.Multiaddr {
 	return h.host.Addrs()
+}
+
+// SetStreamHandler registers a libp2p stream handler.
+func (h *Host) SetStreamHandler(id protocol.ID, handler func(p2pnetwork.Stream)) {
+	h.host.SetStreamHandler(id, handler)
+}
+
+// NewStream opens a stream to a peer for the given protocol.
+func (h *Host) NewStream(ctx context.Context, peerID peer.ID, id protocol.ID) (p2pnetwork.Stream, error) {
+	return h.host.NewStream(ctx, peerID, id)
 }
 
 // Close closes the host

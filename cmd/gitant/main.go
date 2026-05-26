@@ -162,6 +162,7 @@ var serveCmd = &cobra.Command{
 			if envBootstrap := os.Getenv("GITANT_BOOTSTRAP_PEERS"); envBootstrap != "" {
 				bootstrapPeers = append(bootstrapPeers, strings.Split(envBootstrap, ",")...)
 			}
+			bootstrapPeers = network.MergeBootstrapPeers(bootstrapPeers)
 
 			netNode, err := network.StartNode(context.Background(), network.NodeConfig{
 				ListenAddr:     p2pListen,
