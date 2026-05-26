@@ -90,7 +90,6 @@ type Manager struct {
 	mu            sync.RWMutex
 	stakes        map[string]*StakeInfo
 	nodes         map[string]*NodeInfo
-	rewardPool    uint64
 	epochDuration time.Duration
 	lastEpoch     time.Time
 }
