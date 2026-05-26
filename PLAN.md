@@ -75,12 +75,13 @@
 ## Phase B — Production single-node (next 4–8 weeks)
 
 ### Daemon
-- Real merge commits when branches diverged (not just FF)
-- Smart HTTP ref deletion in receive-pack
-- Wire `AgentRegistry.Record()` on authenticated requests
-- Server integration tests **with** auth middleware
-- Enforce UCAN per-route: `repo:{id}` read/write capabilities
-- Fix fork: inherit visibility rules, block private fork without auth
+- [x] Real merge commits when branches diverged (not just FF)
+- [x] Smart HTTP ref deletion in receive-pack
+- [x] Wire `AgentRegistry.Record()` on authenticated requests
+- [x] Server integration tests **with** auth middleware
+- [x] Enforce UCAN per-route: `repo:{id}` read/write capabilities
+- [x] Fix fork: inherit visibility rules, block private fork without auth
+- [x] GoReleaser + GitHub Actions release pipeline (binaries + GHCR image)
 
 ### Web
 - Repo stars UI (`starRepo`, `getStarCount`)
@@ -90,12 +91,10 @@
 - Metrics dashboard (`/metrics` Prometheus → simple charts)
 - E2E tests (Playwright + docker compose CI job)
 
-### MCP
-- `push_packfile` tool (CLI parity)
-- Pagination params on list tools
-- Remove bogus `status`/`labels` filters or implement in daemon
-- npm publish `v0.1.0` + tag
-- MCP tool handler integration tests
+### MCP (optional — separate Node package)
+- [x] `push_packfile` tool (CLI parity)
+- [x] Pagination params on list tools
+- npm publish `v0.1.0` — optional; install from source with `npm run build` if needed
 
 ### Ops
 - `docker-compose.prod.yml` with Caddy/nginx TLS
@@ -150,7 +149,7 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 |--------|----------------|----------------|
 | `go test ./...` | pass | pass + multi-node integration |
 | Web tests | 20+ pass | + E2E |
-| MCP npm | publishable | 1k+ downloads |
+| MCP npm | optional | install from source |
 | Docker one-command up | < 60s | + 3-node cluster |
 | P2P peer sync | N/A | push on A → visible on B < 30s |
 | Auth bypass | none on private repos | UCAN scoped per repo |
@@ -179,4 +178,4 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 
 ---
 
-*Last updated: 2026-05-26 — Phase A implementation in progress.*
+*Last updated: 2026-05-26 — Phase B single-node hardening; Go release pipeline ready.*

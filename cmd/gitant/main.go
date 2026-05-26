@@ -360,6 +360,14 @@ var restoreCmd = &cobra.Command{
 	},
 }
 
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print version information",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("gitant %s (commit %s, built %s)\n", api.Version, api.Commit, api.BuildTime)
+	},
+}
+
 func copyFile(src, dst string) error {
 	in, err := os.ReadFile(src)
 	if err != nil {
@@ -404,6 +412,7 @@ func init() {
 	cloneCmd.Flags().StringP("remote", "r", "http://localhost:7777", "Remote daemon URL")
 
 	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(pushCmd)
 	rootCmd.AddCommand(pullCmd)

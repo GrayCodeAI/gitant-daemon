@@ -10,7 +10,7 @@ func handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 		"openapi": "3.0.3",
 		"info": map[string]interface{}{
 			"title":       "gitant API",
-			"version":     version,
+			"version":     Version,
 			"description": "Decentralized git hosting platform API",
 		},
 		"servers": []map[string]string{

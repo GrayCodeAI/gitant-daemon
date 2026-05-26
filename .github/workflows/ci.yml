@@ -37,8 +37,15 @@ jobs:
 
       - name: Build
         run: |
-          go build -o gitant ./cmd/gitant/
+          go build -ldflags "-X github.com/lakshmanpatel/gitant/internal/api.Version=ci" -o gitant ./cmd/gitant/
           go build -o git-remote-gitant ./cmd/git-remote-gitant/
+          ./gitant version | grep -q gitant
+
+      - name: Goreleaser snapshot
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
 
       - name: Security scan (govulncheck)
         continue-on-error: true

@@ -7,12 +7,44 @@ Decentralized Git hosting for solo developers and AI agents.
 ### Docker (recommended)
 
 ```bash
-git clone https://github.com/lakshmanpatel/gitant.git
-cd gitant/gitant-daemon
+git clone https://github.com/GrayCodeAI/gitant-daemon.git
+cd gitant-daemon
 docker compose up -d
 ```
 
 Your node is running at `http://localhost:7777`.
+
+### Install a release
+
+**Pre-built binaries** — [GitHub Releases](https://github.com/GrayCodeAI/gitant-daemon/releases):
+
+```bash
+# macOS (Apple Silicon example)
+curl -LO https://github.com/GrayCodeAI/gitant-daemon/releases/latest/download/gitant-daemon_<version>_Darwin_arm64.tar.gz
+tar xzf gitant-daemon_*_Darwin_arm64.tar.gz
+sudo mv gitant git-remote-gitant /usr/local/bin/
+```
+
+**Go install** (requires Go 1.26+):
+
+```bash
+go install github.com/lakshmanpatel/gitant/cmd/gitant@v0.1.0
+go install github.com/lakshmanpatel/gitant/cmd/git-remote-gitant@v0.1.0
+```
+
+**Container** (published on tag push):
+
+```bash
+docker pull ghcr.io/graycodeai/gitant-daemon:latest
+docker run -p 7777:7777 -v gitant-data:/home/gitant/.gitant ghcr.io/graycodeai/gitant-daemon:latest
+```
+
+Check the running version:
+
+```bash
+gitant version
+curl -s http://localhost:7777/api/v1/status | jq .version
+```
 
 ### From source
 
@@ -214,6 +246,7 @@ Returns 503 with `{"status":"degraded"}` if dependencies are unhealthy.
 ```bash
 # Build
 make build
+./bin/gitant version
 
 # Run tests with race detector
 make test
@@ -224,8 +257,8 @@ make lint
 # All checks
 make all
 
-# Load tests (requires k6)
-k6 run -e GITANT_URL=http://localhost:7777 test/load/api-test.js
+# Validate release config (local snapshot, no publish)
+make release
 ```
 
 ## License

@@ -1,5 +1,7 @@
 version: 2
 
+project_name: gitant-daemon
+
 before:
   hooks:
     - go mod tidy
@@ -18,7 +20,10 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.buildTime={{.Date}}
+      - -s -w
+      - -X github.com/lakshmanpatel/gitant/internal/api.Version={{.Version}}
+      - -X github.com/lakshmanpatel/gitant/internal/api.Commit={{.Commit}}
+      - -X github.com/lakshmanpatel/gitant/internal/api.BuildTime={{.Date}}
 
   - id: git-remote-gitant
     main: ./cmd/git-remote-gitant/
@@ -33,7 +38,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w
 
 archives:
   - format: tar.gz
@@ -48,8 +53,8 @@ archives:
 
 dockers:
   - image_templates:
-      - "ghcr.io/lakshmanpatel/gitant:{{ .Version }}"
-      - "ghcr.io/lakshmanpatel/gitant:latest"
+      - "ghcr.io/graycodeai/gitant-daemon:{{ .Version }}"
+      - "ghcr.io/graycodeai/gitant-daemon:latest"
     dockerfile: Dockerfile
     build_flag_templates:
       - "--pull"
@@ -70,6 +75,6 @@ changelog:
 
 release:
   github:
-    owner: lakshmanpatel
-    name: gitant
+    owner: GrayCodeAI
+    name: gitant-daemon
   prerelease: auto

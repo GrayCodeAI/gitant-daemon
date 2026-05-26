@@ -22,9 +22,6 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
-// version is set via ldflags at build time.
-var version = "dev"
-
 // Prometheus metrics.
 var (
 	httpRequestsTotal = prometheus.NewCounterVec(
@@ -318,7 +315,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"version":  version,
+		"version":  Version,
 		"peers":    0,
 		"repos":    len(s.repos.List()),
 		"agents":   len(s.agents.List()),
