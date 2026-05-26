@@ -37,7 +37,7 @@
 | DID + UCAN + HTTP Signatures | **Implemented** — enforcement gaps being closed |
 | Web dashboard | **Operational locally** — most daemon APIs wired |
 | MCP (58 tools) | **Dev-ready** — schema fixes + npm publish pending |
-| P2P / multi-node sync | **Not wired** — libraries exist, `serve` doesn't start libp2p |
+| P2P / multi-node sync | **Partial** — `--p2p` wires libp2p; gossip + federation API; full CRDT sync pending |
 
 ---
 
@@ -72,7 +72,7 @@
 
 ---
 
-## Phase B — Production single-node (next 4–8 weeks)
+## Phase B — Production single-node ✅ mostly complete
 
 ### Daemon
 - [x] Real merge commits when branches diverged (not just FF)
@@ -81,26 +81,27 @@
 - [x] Server integration tests **with** auth middleware
 - [x] Enforce UCAN per-route: `repo:{id}` read/write capabilities
 - [x] Fix fork: inherit visibility rules, block private fork without auth
-- [x] GoReleaser + GitHub Actions release pipeline (binaries + GHCR image)
 
 ### Web
-- Repo stars UI (`starRepo`, `getStarCount`)
-- Label management pages
-- Release detail route
-- Settings: daemon URL display, connection test
-- Metrics dashboard (`/metrics` Prometheus → simple charts)
-- E2E tests (Playwright + docker compose CI job)
+- [x] Repo stars UI (`starRepo`, `getStarCount`)
+- [x] Label management pages
+- [x] Release detail route
+- [x] Settings: daemon URL display, connection test
+- [x] Metrics dashboard (`/metrics` Prometheus → simple charts)
+- [x] E2E tests (Playwright CI job)
 
-### MCP (optional — separate Node package)
+### MCP
 - [x] `push_packfile` tool (CLI parity)
 - [x] Pagination params on list tools
-- npm publish `v0.1.0` — optional; install from source with `npm run build` if needed
+- [ ] Remove bogus `status`/`labels` filters or implement in daemon
+- [ ] npm publish `v0.1.0` + tag (deprioritized — Go release path preferred)
+- [ ] MCP tool handler integration tests
 
 ### Ops
-- `docker-compose.prod.yml` with Caddy/nginx TLS
-- Documented backup schedule (daemon backup + volume snapshots)
-- Health checks in compose for both services
-- Install script at `get.gitant.dev` verified against compose stack
+- [x] `docker-compose.prod.yml` with Caddy/nginx TLS
+- [x] Documented backup schedule (`docs/BACKUP.md`)
+- [x] Health checks in compose for both services
+- [x] Install script (`scripts/install.sh` for get.gitant.dev)
 
 ---
 
@@ -108,22 +109,23 @@
 
 Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues), UCAN delegation chains.
 
-### C1 — Network bootstrap
-- Start libp2p host from `gitant serve` (`internal/network/host.go`)
-- mDNS for LAN; DHT for WAN peer discovery
-- Config: `--p2p`, `--bootstrap-peers`, listen addrs
-- Status API: real peer count, connected multiaddrs
+### C1 — Network bootstrap ✅
+- [x] Start libp2p host from `gitant serve` (`--p2p`)
+- [x] mDNS for LAN; DHT for WAN peer discovery
+- [x] Config: `--p2p`, `--bootstrap-peers`, listen addrs
+- [x] Status API: real peer count, connected multiaddrs
 
-### C2 — Data replication
-- GossipSub topics per repo: `gitant/repo/{id}/events`
-- Replicate blockstore objects on push (provide/find via DHT)
-- CRDT op broadcast: issue/PR/task Lamport ops merged across peers
-- Conflict resolution policy documented + tested
+### C2 — Data replication (partial)
+- [x] GossipSub topics per repo: `gitant/repo/{id}/events`
+- [x] DHT provide repo head on push
+- [ ] Replicate blockstore objects on push (provide/find via DHT)
+- [ ] CRDT op broadcast: issue/PR/task Lamport ops merged across peers
+- [ ] Conflict resolution policy documented + tested
 
-### C3 — Federation
-- Cross-instance repo discovery endpoint
-- Bootstrap seed nodes (Phase 5 roadmap)
-- Optional IPFS pinning adapter (implement or remove stub in `internal/ipfs/`)
+### C3 — Federation (partial)
+- [x] Cross-instance discovery endpoint (`GET /api/v1/federation/discover`)
+- [ ] Bootstrap seed nodes (Phase 5 roadmap)
+- [ ] Optional IPFS pinning adapter (stub remains in `internal/ipfs/`)
 
 ### C4 — Agent economy
 - Trust scores from cross-peer attestation
@@ -149,7 +151,7 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 |--------|----------------|----------------|
 | `go test ./...` | pass | pass + multi-node integration |
 | Web tests | 20+ pass | + E2E |
-| MCP npm | optional | install from source |
+| MCP npm | publishable | 1k+ downloads |
 | Docker one-command up | < 60s | + 3-node cluster |
 | P2P peer sync | N/A | push on A → visible on B < 30s |
 | Auth bypass | none on private repos | UCAN scoped per repo |
@@ -178,4 +180,4 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 
 ---
 
-*Last updated: 2026-05-26 — Phase B single-node hardening; Go release pipeline ready.*
+*Last updated: 2026-05-26 — Phase A implementation in progress.*

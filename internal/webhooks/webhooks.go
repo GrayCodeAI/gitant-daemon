@@ -52,10 +52,11 @@ type Webhook struct {
 
 // Manager manages webhooks and dispatches events
 type Manager struct {
-	mu       sync.RWMutex
-	webhooks map[string]*Webhook
-	client   *http.Client
-	dataDir  string
+	mu        sync.RWMutex
+	webhooks  map[string]*Webhook
+	client    *http.Client
+	dataDir   string
+	eventHook func(Event)
 }
 
 // NewManager creates a new webhook manager
@@ -133,12 +134,27 @@ func (m *Manager) List() []*Webhook {
 	return whs
 }
 
+// SetEventHook registers a callback invoked for every dispatched event.
+func (m *Manager) SetEventHook(fn func(Event)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.eventHook = fn
+}
+
 // Dispatch sends an event to all matching webhooks
 func (m *Manager) Dispatch(event Event) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	hook := m.eventHook
+	m.mu.RUnlock()
 
 	event.Timestamp = time.Now()
+
+	if hook != nil {
+		hook(event)
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	for _, wh := range m.webhooks {
 		if m.matches(wh, event.Type) {

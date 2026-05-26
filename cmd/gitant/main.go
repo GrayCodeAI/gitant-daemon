@@ -15,6 +15,7 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/cli"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/identity"
+	"github.com/lakshmanpatel/gitant/internal/network"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 	"github.com/spf13/cobra"
@@ -149,6 +150,32 @@ var serveCmd = &cobra.Command{
 
 		// Create server
 		server := api.NewServer(port, id, repos, issueStore, prStore, blockstore, labelStore, taskStore, releaseStore, protectionStore, webhookManager, revocationStore, dataStoreDir, corsOrigins)
+
+		p2pEnabled, _ := cmd.Flags().GetBool("p2p")
+		if envP2P := os.Getenv("GITANT_P2P"); envP2P != "" {
+			p2pEnabled = envP2P == "1" || strings.EqualFold(envP2P, "true")
+		}
+		if p2pEnabled {
+			p2pListen, _ := cmd.Flags().GetString("p2p-listen")
+			p2pMDNS, _ := cmd.Flags().GetBool("p2p-mdns")
+			bootstrapPeers, _ := cmd.Flags().GetStringSlice("bootstrap-peers")
+			if envBootstrap := os.Getenv("GITANT_BOOTSTRAP_PEERS"); envBootstrap != "" {
+				bootstrapPeers = append(bootstrapPeers, strings.Split(envBootstrap, ",")...)
+			}
+
+			netNode, err := network.StartNode(context.Background(), network.NodeConfig{
+				ListenAddr:     p2pListen,
+				EnableMDNS:     p2pMDNS,
+				BootstrapPeers: bootstrapPeers,
+				ServerDID:      id.DID,
+				HTTPPort:       port,
+			})
+			if err != nil {
+				slog.Warn("P2P startup failed, continuing HTTP-only", "error", err)
+			} else {
+				server.SetNetwork(netNode)
+			}
+		}
 
 		tlsCert, _ := cmd.Flags().GetString("tls-cert")
 		tlsKey, _ := cmd.Flags().GetString("tls-key")
@@ -402,6 +429,10 @@ func init() {
 	serveCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")
 	serveCmd.Flags().String("tls-cert", "", "TLS certificate file path")
 	serveCmd.Flags().String("tls-key", "", "TLS private key file path")
+	serveCmd.Flags().Bool("p2p", false, "Enable libp2p networking (DHT + GossipSub)")
+	serveCmd.Flags().String("p2p-listen", "/ip4/0.0.0.0/tcp/0", "libp2p listen multiaddr")
+	serveCmd.Flags().Bool("p2p-mdns", true, "Enable mDNS peer discovery on LAN")
+	serveCmd.Flags().StringSlice("bootstrap-peers", nil, "Bootstrap peer multiaddrs (repeatable)")
 
 	pushCmd.Flags().StringP("remote", "r", "http://localhost:7777", "Remote daemon URL")
 	pushCmd.Flags().String("repo", "", "Repository name (required)")

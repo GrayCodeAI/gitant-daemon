@@ -101,7 +101,7 @@ gitant-web (Next.js)       Web frontend (18 routes, paginated, responsive)
 
 | Command | Description |
 |---------|-------------|
-| `gitant serve [--port P] [--data-dir D] [--tls-cert F] [--tls-key F]` | Start the daemon |
+| `gitant serve [--port P] [--data-dir D] [--tls-cert F] [--tls-key F] [--p2p] [--p2p-listen ADDR] [--p2p-mdns] [--bootstrap-peers ...]` | Start the daemon |
 | `gitant init` | Initialize a local repo |
 | `gitant push --repo <id> --remote <url>` | Push to daemon (packfile) |
 | `gitant pull --repo <id> --remote <url>` | Pull from daemon |

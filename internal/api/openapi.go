@@ -39,7 +39,27 @@ func handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 					"responses": successResponse(map[string]interface{}{
 						"version": "0.1.0", "peers": 0, "repos": 1,
 						"agents": 1, "uptime": "1h2m3s", "identity": "did:key:z6Mk...",
+						"p2p": map[string]interface{}{"enabled": false},
 					}),
+				},
+			},
+			"/api/v1/network/peers": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary":     "P2P network status",
+					"description": "Returns libp2p peer ID, listen addresses, and connected peers",
+					"tags":        []string{"System"},
+					"responses":   successResponse(map[string]interface{}{"enabled": true, "peers": 0}),
+				},
+			},
+			"/api/v1/federation/discover": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary":     "Federation discovery",
+					"description": "Announces this node and returns known federation records",
+					"tags":        []string{"System"},
+					"parameters": []map[string]interface{}{
+						{"name": "did", "in": "query", "schema": map[string]string{"type": "string"}},
+					},
+					"responses": successResponse(map[string]interface{}{"nodes": []interface{}{}}),
 				},
 			},
 			"/api/v1/repos": map[string]interface{}{

@@ -18,6 +18,7 @@ import (
 	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/identity"
+	"github.com/lakshmanpatel/gitant/internal/network"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
@@ -64,6 +65,7 @@ type Server struct {
 	rateLimiter *authMiddleware.RateLimiter
 	corsOrigins []string
 	startTime   time.Time
+	network     *network.Node
 }
 
 func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string, corsOrigins []string) *Server {
@@ -96,6 +98,30 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 	}
 
 	return s
+}
+
+// SetNetwork attaches the libp2p node and wires federated event replication.
+func (s *Server) SetNetwork(node *network.Node) {
+	s.network = node
+	if node == nil || s.webhooks == nil {
+		return
+	}
+
+	s.webhooks.SetEventHook(func(event webhooks.Event) {
+		fedEvent := network.FederatedEvent{
+			Type:      string(event.Type),
+			Repo:      event.Repo,
+			Timestamp: event.Timestamp,
+			Data:      event.Data,
+		}
+		if err := node.PublishRepoEvent(event.Repo, fedEvent); err != nil {
+			slog.Warn("failed to publish federated event", "type", event.Type, "repo", event.Repo, "error", err)
+		}
+		if event.Type == webhooks.EventPush {
+			ref, _ := event.Data["ref"].(string)
+			node.ProvideRepoHead(context.Background(), event.Repo, ref)
+		}
+	})
 }
 
 func requestLogger(next http.Handler) http.Handler {
@@ -174,6 +200,8 @@ func (s *Server) setupRoutes() {
 	// Health, status, metrics, and API docs (public)
 	s.router.Get("/health", s.handleHealth)
 	s.router.Get("/api/v1/status", s.handleStatus)
+	s.router.Get("/api/v1/network/peers", handlers.NetworkStatus(s.network))
+	s.router.Get("/api/v1/federation/discover", handlers.DiscoverFederation(s.network))
 	s.router.Handle("/metrics", promhttp.Handler())
 	s.router.Get("/api/v1/openapi.json", handleOpenAPI)
 
@@ -313,15 +341,32 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	peerCount := 0
+	status := map[string]interface{}{
 		"version":  Version,
-		"peers":    0,
+		"peers":    peerCount,
 		"repos":    len(s.repos.List()),
 		"agents":   len(s.agents.List()),
 		"uptime":   time.Since(s.startTime).String(),
 		"identity": s.identity.DID,
-	})
+	}
+
+	if s.network != nil {
+		peerCount = s.network.PeerCount()
+		status["peers"] = peerCount
+		status["p2p"] = map[string]interface{}{
+			"enabled": true,
+			"peer_id": s.network.Host.ID().String(),
+			"addrs":   s.network.AdvertisedAddrs(),
+		}
+	} else {
+		status["p2p"] = map[string]interface{}{
+			"enabled": false,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
 }
 
 // Start starts the HTTP(S) server. If tlsCert and tlsKey are non-empty, TLS is used.
@@ -380,6 +425,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	save("webhooks", s.webhooks.Save)
 	save("revocations", s.revocations.Save)
 	save("agents", s.agents.Save)
+
+	if s.network != nil {
+		if err := s.network.Close(); err != nil {
+			slog.Error("P2P shutdown error", "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
 
 	slog.Info("shutdown complete")
 	return firstErr

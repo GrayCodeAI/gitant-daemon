@@ -7,6 +7,8 @@ services:
       - gitant-data:/home/gitant/.gitant
     environment:
       - GITANT_PORT=7777
+      - GITANT_P2P=true
+    command: ["serve", "--p2p", "--p2p-mdns"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:7777/health"]
