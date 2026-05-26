@@ -143,7 +143,12 @@ func (s *Server) setupMiddleware() {
 	s.router.Use(middleware.RequestID)
 	origins := s.corsOrigins
 	if len(origins) == 0 {
-		origins = []string{"http://localhost:3303", "https://*.gitant.dev"}
+		origins = []string{
+			"http://localhost:3303",
+			"http://localhost:3456",
+			"http://localhost:3000",
+			"https://*.gitant.dev",
+		}
 	}
 	s.router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   origins,
@@ -233,9 +238,9 @@ func (s *Server) setupRoutes() {
 		r.Get("/", handlers.ListAgents(s.agents))
 		r.Get("/resolve/{did}", handlers.ResolveDID())
 		r.Get("/{did}", handlers.GetAgent(s.agents))
+		r.Post("/generate-did", handlers.GenerateDID()) // public — bootstrapping
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware.RequireIdentity)
-			r.Post("/generate-did", handlers.GenerateDID())
 			r.Post("/verify", handlers.VerifyUCAN())
 			r.Post("/{did}/delegate", handlers.DelegateCapability(s.identity))
 		})
