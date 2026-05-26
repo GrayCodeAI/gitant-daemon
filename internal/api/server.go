@@ -213,11 +213,17 @@ func (s *Server) setupRoutes() {
 			r.Get("/{id}/releases/{releaseId}", handlers.GetRelease(s.releases))
 		})
 
-		// Authenticated mutating endpoints
+		// Authenticated mutating endpoints (repo creation — no repo id yet)
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Post("/", handlers.CreateRepo(s.repos, s.webhooks))
+		})
+
+		// Repo-scoped mutating endpoints (UCAN write capability enforced)
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware.RequireIdentity)
 			r.Use(handlers.RequireRepoReadAccess(s.repos, s.identity.DID))
-			r.Post("/", handlers.CreateRepo(s.repos, s.webhooks))
+			r.Use(authMiddleware.RequireRepoWriteCapability("id"))
 			r.Delete("/{id}", handlers.DeleteRepo(s.repos, s.webhooks))
 			r.Post("/{id}/fork", handlers.ForkRepo(s.repos, s.webhooks, s.identity.DID))
 			r.Post("/{id}/star", handlers.StarRepo(s.repos))

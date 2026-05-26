@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/lakshmanpatel/gitant/internal/identity"
 )
 
@@ -135,6 +136,21 @@ func RequireCapability(resource, action string) func(http.Handler) http.Handler 
 				return
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequireRepoWriteCapability enforces repo:{id} write for UCAN-authenticated agents.
+// HTTP-signature operators (no UCAN in context) pass through unchanged.
+func RequireRepoWriteCapability(paramName string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			repoID := chi.URLParam(r, paramName)
+			if repoID == "" {
+				http.Error(w, "Repository ID required", http.StatusBadRequest)
+				return
+			}
+			RequireCapability("repo:"+repoID, "write")(next).ServeHTTP(w, r)
 		})
 	}
 }

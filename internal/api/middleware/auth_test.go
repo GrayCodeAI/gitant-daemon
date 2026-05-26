@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/lakshmanpatel/gitant/internal/identity"
 )
 
@@ -320,5 +321,52 @@ func TestGetUCAN_Nil(t *testing.T) {
 	ucan := GetUCAN(req)
 	if ucan != nil {
 		t.Fatal("expected nil UCAN")
+	}
+}
+
+func TestRequireRepoWriteCapability_AllowsOperator(t *testing.T) {
+	r := chi.NewRouter()
+	r.Route("/repos/{id}", func(r chi.Router) {
+		r.Use(RequireRepoWriteCapability("id"))
+		r.Post("/issues", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+		}))
+	})
+
+	req := httptest.NewRequest("POST", "/repos/my-repo/issues", nil)
+	ctx := context.WithValue(req.Context(), IdentityKey, "did:key:zoperator")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", rec.Code)
+	}
+}
+
+func TestRequireRepoWriteCapability_DeniesReadOnlyUCAN(t *testing.T) {
+	ucan := &identity.UCAN{
+		Issuer: "did:key:zagent",
+		Caps: []identity.Capability{
+			{Resource: "repo:my-repo", Actions: []string{"read"}},
+		},
+	}
+
+	r := chi.NewRouter()
+	r.Route("/repos/{id}", func(r chi.Router) {
+		r.Use(RequireRepoWriteCapability("id"))
+		r.Post("/issues", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+		}))
+	})
+
+	req := httptest.NewRequest("POST", "/repos/my-repo/issues", nil)
+	ctx := context.WithValue(req.Context(), UCANKey, ucan)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
 	}
 }
