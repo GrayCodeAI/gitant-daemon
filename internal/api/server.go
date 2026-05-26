@@ -246,9 +246,13 @@ func (s *Server) setupRoutes() {
 	// Health, status, metrics, and API docs (public)
 	s.router.Get("/health", s.handleHealth)
 	s.router.Get("/api/v1/status", s.handleStatus)
-	s.router.Get("/api/v1/network/peers", handlers.NetworkStatus(s.network))
+	s.router.Get("/api/v1/network/peers", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlers.NetworkStatus(s.network)(w, r)
+	}))
 	s.router.Get("/api/v1/network/bootstrap", handlers.BootstrapPeers())
-	s.router.Get("/api/v1/federation/discover", handlers.DiscoverFederation(s.network))
+	s.router.Get("/api/v1/federation/discover", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlers.DiscoverFederation(s.network)(w, r)
+	}))
 	s.router.Handle("/metrics", promhttp.Handler())
 	s.router.Get("/api/v1/openapi.json", handleOpenAPI)
 

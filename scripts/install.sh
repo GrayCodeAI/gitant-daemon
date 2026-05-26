@@ -48,18 +48,20 @@ install_binary() {
 }
 
 install_docker_stack() {
-  info "Docker mode: clone or use existing gitant-core checkout with docker-compose.yml"
+  info "Docker mode: run daemon + web from gitant-daemon"
   cat <<'EOF'
 
 Run the full stack (daemon + web):
 
+  git clone https://github.com/GrayCodeAI/gitant-daemon.git
   git clone https://github.com/GrayCodeAI/gitant-web.git
-  # Or use the monorepo layout with gitant-daemon + gitant-web siblings
-
-  docker compose up -d
+  cd gitant-daemon
+  docker compose -f docker-compose.stack.yml up -d
 
 Daemon: http://localhost:7777
 Web UI: http://localhost:3303
+
+Install the CLI separately: https://github.com/GrayCodeAI/gitant-cli
 
 EOF
 }

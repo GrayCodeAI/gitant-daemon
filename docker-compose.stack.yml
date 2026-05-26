@@ -1,5 +1,5 @@
-# Run from a checkout with gitant-daemon and gitant-web as sibling directories
-# (e.g. gitant-core/). From monorepo root: docker compose -f gitant-daemon/docker-compose.stack.yml up
+# Requires gitant-web cloned as a sibling directory (../gitant-web).
+# From gitant-daemon: docker compose -f docker-compose.stack.yml up --build
 services:
   daemon:
     build: .

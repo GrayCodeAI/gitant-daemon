@@ -11,32 +11,56 @@ import (
 
 // GossipSub wraps the GossipSub protocol for pub/sub messaging
 type GossipSub struct {
-	_   sync.RWMutex
-	ps   *pubsub.PubSub
-	host *Host
-	ctx  context.Context
+	mu     sync.RWMutex
+	ps     *pubsub.PubSub
+	host   *Host
+	ctx    context.Context
+	topics map[string]*pubsub.Topic
 }
 
 // NewGossipSub creates a new GossipSub instance
 func NewGossipSub(ctx context.Context, host *Host) (*GossipSub, error) {
-	// Create GossipSub
 	ps, err := pubsub.NewGossipSub(ctx, host.host)
 	if err != nil {
 		return nil, fmt.Errorf("creating GossipSub: %w", err)
 	}
 
 	return &GossipSub{
-		ps:   ps,
-		host: host,
-		ctx:  ctx,
+		ps:     ps,
+		host:   host,
+		ctx:    ctx,
+		topics: make(map[string]*pubsub.Topic),
 	}, nil
+}
+
+func (g *GossipSub) joinTopic(topic string) (*pubsub.Topic, error) {
+	g.mu.RLock()
+	if t, ok := g.topics[topic]; ok {
+		g.mu.RUnlock()
+		return t, nil
+	}
+	g.mu.RUnlock()
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if t, ok := g.topics[topic]; ok {
+		return t, nil
+	}
+
+	t, err := g.ps.Join(topic)
+	if err != nil {
+		return nil, fmt.Errorf("joining topic: %w", err)
+	}
+	g.topics[topic] = t
+	return t, nil
 }
 
 // Subscribe subscribes to a topic
 func (g *GossipSub) Subscribe(topic string) (*Subscription, error) {
-	t, err := g.ps.Join(topic)
+	t, err := g.joinTopic(topic)
 	if err != nil {
-		return nil, fmt.Errorf("joining topic: %w", err)
+		return nil, err
 	}
 
 	sub, err := t.Subscribe()
@@ -52,9 +76,9 @@ func (g *GossipSub) Subscribe(topic string) (*Subscription, error) {
 
 // Publish publishes a message to a topic
 func (g *GossipSub) Publish(topic string, data []byte) error {
-	t, err := g.ps.Join(topic)
+	t, err := g.joinTopic(topic)
 	if err != nil {
-		return fmt.Errorf("joining topic: %w", err)
+		return err
 	}
 
 	return t.Publish(g.ctx, data)
@@ -67,7 +91,12 @@ func (g *GossipSub) Topics() []string {
 
 // Close closes the GossipSub
 func (g *GossipSub) Close() error {
-	// GossipSub doesn't have a Close method
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for name, topic := range g.topics {
+		_ = topic.Close()
+		delete(g.topics, name)
+	}
 	return nil
 }
 

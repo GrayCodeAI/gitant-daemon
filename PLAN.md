@@ -9,7 +9,13 @@
 │ AI Agents   │◄────────────────────►│  gitant-mcp  │
 └─────────────┘                      └──────┬───────┘
                                               │ REST + UCAN
-┌─────────────┐     /api/daemon proxy  ┌──────▼───────┐
+┌─────────────┐     git / gitant CLI   ┌──────────────┐
+│  Developers │◄────────────────────►│  gitant-cli  │
+└─────────────┘                      └──────┬───────┘
+       │                                    │ REST + UCAN
+       │     /api/daemon proxy              │
+       ▼                                    ▼
+┌─────────────┐                      ┌──────────────┐
 │  Developers │◄────────────────────►│  gitant-web  │
 └─────────────┘                      └──────┬───────┘
                                               │
@@ -36,12 +42,12 @@
 | Collaboration (issues/PRs/tasks) | **Operational** — CRDT metadata on disk |
 | DID + UCAN + HTTP Signatures | **Implemented** — enforcement gaps being closed |
 | Web dashboard | **Operational locally** — most daemon APIs wired |
-| MCP (58 tools) | **Dev-ready** — schema fixes + npm publish pending |
+| MCP (64 tools) | **Dev-ready** — GitHub clone + release tarballs |
 | P2P / multi-node sync | **Partial** — block exchange + CRDT gossip; bootstrap seeds via env |
 
 ---
 
-## Phase A — Operational trust (THIS SPRINT) ✅ implementing
+## Phase A — Operational trust ✅ complete
 
 ### gitant-daemon
 - [x] Fix backup/restore (`identity.key`, `repos/`, `data/` subtree)
@@ -50,6 +56,7 @@
 - [x] Live agent count in `/api/v1/status`
 - [x] `RequireCapability`: allow HTTP-signature operators; UCAN agents scoped
 - [x] Fix `"identity"` context key → `middleware.GetIdentity` across handlers
+- [x] `docker-compose.stack.yml` for daemon + web stack
 
 ### gitant-web
 - [x] UCAN token settings on `/agents`
@@ -63,12 +70,12 @@
 - [x] Issue/PR IDs as strings (match daemon)
 - [x] `push_code` includes `objects[]`
 - [x] `get_daemon_status` tool
-- [x] npm `bin`, `type: module`, shebang
-- [x] README updated (58 tools, env vars)
+- [x] Node `bin` entry, ESM, shebang
+- [x] README updated (64 tools, env vars)
 
-### gitant-core (monorepo)
-- [x] Root `docker-compose.yml` for one-command stack
-- [x] This plan document
+### gitant-cli
+- [x] Standalone developer CLI repo (`GrayCodeAI/gitant-cli`)
+- [x] v0.1.0 release + install script
 
 ---
 
@@ -96,13 +103,13 @@
 - [x] Pagination params on list tools
 - [x] List filters aligned with daemon (`status`, `labels`)
 - [x] MCP tool handler integration tests
-- [ ] npm publish (deferred — Go binary release path preferred)
+- [x] GitHub release workflow (`.github/workflows/release.yml` — tarball on tag)
 
 ### Ops
 - [x] `docker-compose.prod.yml` with Caddy/nginx TLS
 - [x] Documented backup schedule (`docs/BACKUP.md`)
 - [x] Health checks in compose for both services
-- [x] Install script (`scripts/install.sh` for get.gitant.dev)
+- [x] Install scripts (`gitant-cli/scripts/install.sh`, `gitant-daemon/scripts/install.sh`)
 
 ---
 
@@ -123,15 +130,15 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 - [x] CRDT op broadcast: issue/PR Lamport ops merged across peers
 - [x] Conflict resolution policy documented + tested (`docs/CRDT_SYNC.md`)
 
-### C3 — Federation (partial)
+### C3 — Federation ✅
 - [x] Cross-instance discovery endpoint (`GET /api/v1/federation/discover`)
-- [x] Bootstrap seed nodes via `GITANT_SEED_PEERS` / `--bootstrap-peers`
-- [ ] Optional IPFS pinning adapter (stub remains in `internal/ipfs/`)
+- [x] Bootstrap seed nodes via `GITANT_SEED_PEERS`, embedded JSON, `--bootstrap-peers`
+- [x] Optional IPFS warm pinning adapter (`--ipfs-pin`, in-process CID store)
 
-### C4 — Agent economy
-- Trust scores from cross-peer attestation
-- Agent marketplace (Phase 6)
-- TypeScript SDK for agent developers
+### C4 — Agent economy (partial)
+- [x] Trust scores from cross-peer attestation (gossip + `POST /agents/{did}/attest`)
+- [x] TypeScript SDK (`gitant-mcp/sdk`, `@gitant/sdk`)
+- [ ] Agent marketplace (Phase 6)
 
 ---
 
@@ -152,7 +159,7 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 |--------|----------------|----------------|
 | `go test ./...` | pass | pass + multi-node integration |
 | Web tests | 20+ pass | + E2E |
-| MCP npm | publishable | 1k+ downloads |
+| MCP releases | GitHub tarball | tagged releases + docs |
 | Docker one-command up | < 60s | + 3-node cluster |
 | P2P peer sync | N/A | push on A → visible on B < 30s |
 | Auth bypass | none on private repos | UCAN scoped per repo |
@@ -174,10 +181,14 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 
 | Repo | Purpose | Port |
 |------|---------|------|
-| `gitant-daemon` | Go binary, API, git transport | 7777 |
+| `gitant-cli` | Developer CLI (`gitant`, `git-remote-gitant`) | — |
+| `gitant-daemon` | Server (`gitant serve`), API, git transport | 7777 |
 | `gitant-web` | Next.js UI | 3303 (dev) / 3000 (prod) |
 | `gitant-mcp` | MCP server for agents | stdio |
-| `gitant-core/` | Monorepo wrapper, compose, this plan | — |
+
+Local dev: clone all four repos into one folder (e.g. `gitant-core/`) — no wrapper repo required.
+
+**Distribution:** GitHub only (clone, releases, install scripts). Public package registry deferred until post-launch.
 
 ---
 

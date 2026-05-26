@@ -4,7 +4,10 @@ Server for [Gitant](https://github.com/GrayCodeAI/gitant-daemon) — decentraliz
 
 **Developers:** install the CLI from [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli) (push, issues, PRs).  
 **Operators:** run this repo (`gitant serve`) or Docker.  
-**Browser:** use [`gitant-web`](https://github.com/GrayCodeAI/gitant-web).
+**Browser:** use [`gitant-web`](https://github.com/GrayCodeAI/gitant-web).  
+**Agents:** use [`gitant-mcp`](https://github.com/GrayCodeAI/gitant-mcp) (64 MCP tools).
+
+Full walkthrough: **[Developer quickstart](docs/QUICKSTART.md)** (CLI + daemon + web + MCP + auth).
 
 ## Quick Start
 
