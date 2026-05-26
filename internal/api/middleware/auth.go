@@ -116,12 +116,21 @@ func RequireIdentity(next http.Handler) http.Handler {
 	})
 }
 
-// RequireCapability returns middleware that checks for a specific UCAN capability
+// RequireCapability returns middleware that checks for a specific UCAN capability.
+// HTTP-signature authenticated operators (no UCAN) are allowed through.
 func RequireCapability(resource, action string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ucan := GetUCAN(r)
-			if ucan == nil || !ucan.HasCapability(resource, action) {
+			if ucan == nil {
+				if GetIdentity(r) != "" {
+					next.ServeHTTP(w, r)
+					return
+				}
+				http.Error(w, "Insufficient capabilities", http.StatusForbidden)
+				return
+			}
+			if !ucan.HasCapability(resource, action) {
 				http.Error(w, "Insufficient capabilities", http.StatusForbidden)
 				return
 			}

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 )
 
@@ -14,7 +15,7 @@ func StarRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		repoID := chi.URLParam(r, "id")
 
 		did := "anonymous"
-		if d, ok := r.Context().Value("identity").(string); ok && d != "" {
+		if d := authMiddleware.GetIdentity(r); d != "" {
 			did = d
 		}
 
@@ -38,7 +39,7 @@ func UnstarRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		repoID := chi.URLParam(r, "id")
 
 		did := "anonymous"
-		if d, ok := r.Context().Value("identity").(string); ok && d != "" {
+		if d := authMiddleware.GetIdentity(r); d != "" {
 			did = d
 		}
 

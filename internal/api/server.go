@@ -172,36 +172,41 @@ func (s *Server) setupRoutes() {
 
 	// Repository endpoints
 	s.router.Route("/api/v1/repos", func(r chi.Router) {
-		// Public read-only
-		r.Get("/", handlers.ListRepos(s.repos))
-		r.Get("/{id}", handlers.GetRepo(s.repos))
-		r.Get("/{id}/stars", handlers.GetStarCount(s.repos))
-		r.Get("/{id}/clone", handlers.CloneRepo(s.repos))
-		r.Get("/{id}/refs", handlers.ListRefs(s.repos))
-		r.Get("/{id}/objects/{hash}", handlers.GetObject(s.repos))
-		r.Get("/{id}/info/refs", handlers.InfoRefs(s.repos))
-		r.Get("/{id}/issues", handlers.ListIssues(s.issues))
-		r.Get("/{id}/issues/{issueId}", handlers.GetIssue(s.issues))
-		r.Get("/{id}/issues/{issueId}/comments", handlers.ListIssueComments(s.issues))
-		r.Get("/{id}/prs", handlers.ListPRs(s.prs))
-		r.Get("/{id}/prs/{prId}", handlers.GetPR(s.prs))
-		r.Get("/{id}/prs/{prId}/comments", handlers.ListPRComments(s.prs))
-		r.Get("/{id}/files", handlers.ListFiles(s.repos))
-		r.Get("/{id}/files/{path}", handlers.GetFile(s.repos))
-		r.Get("/{id}/search", handlers.SearchCode(s.repos))
-		r.Get("/{id}/commits", handlers.GetCommitLog(s.repos))
-		r.Get("/{id}/diff", handlers.DiffCommits(s.repos))
-		r.Get("/{id}/commits/{hash}/parents", handlers.DiffCommitAllParents(s.repos))
-		r.Get("/{id}/labels", handlers.ListLabels(s.labels))
-		r.Get("/{id}/protections", handlers.ListProtections(s.protection))
-		r.Get("/{id}/protections/{branch}", handlers.GetProtection(s.protection))
-		r.Get("/{id}/tasks", handlers.ListTasks(s.tasks))
-		r.Get("/{id}/releases", handlers.ListReleases(s.releases))
-		r.Get("/{id}/releases/{releaseId}", handlers.GetRelease(s.releases))
+		r.Get("/", handlers.ListRepos(s.repos, s.identity.DID))
+
+		// Public read-only (private repos require auth)
+		r.Group(func(r chi.Router) {
+			r.Use(handlers.RequireRepoReadAccess(s.repos, s.identity.DID))
+			r.Get("/{id}", handlers.GetRepo(s.repos))
+			r.Get("/{id}/stars", handlers.GetStarCount(s.repos))
+			r.Get("/{id}/clone", handlers.CloneRepo(s.repos))
+			r.Get("/{id}/refs", handlers.ListRefs(s.repos))
+			r.Get("/{id}/objects/{hash}", handlers.GetObject(s.repos))
+			r.Get("/{id}/info/refs", handlers.InfoRefs(s.repos))
+			r.Get("/{id}/issues", handlers.ListIssues(s.issues))
+			r.Get("/{id}/issues/{issueId}", handlers.GetIssue(s.issues))
+			r.Get("/{id}/issues/{issueId}/comments", handlers.ListIssueComments(s.issues))
+			r.Get("/{id}/prs", handlers.ListPRs(s.prs))
+			r.Get("/{id}/prs/{prId}", handlers.GetPR(s.prs))
+			r.Get("/{id}/prs/{prId}/comments", handlers.ListPRComments(s.prs))
+			r.Get("/{id}/files", handlers.ListFiles(s.repos))
+			r.Get("/{id}/files/{path}", handlers.GetFile(s.repos))
+			r.Get("/{id}/search", handlers.SearchCode(s.repos))
+			r.Get("/{id}/commits", handlers.GetCommitLog(s.repos))
+			r.Get("/{id}/diff", handlers.DiffCommits(s.repos))
+			r.Get("/{id}/commits/{hash}/parents", handlers.DiffCommitAllParents(s.repos))
+			r.Get("/{id}/labels", handlers.ListLabels(s.labels))
+			r.Get("/{id}/protections", handlers.ListProtections(s.protection))
+			r.Get("/{id}/protections/{branch}", handlers.GetProtection(s.protection))
+			r.Get("/{id}/tasks", handlers.ListTasks(s.tasks))
+			r.Get("/{id}/releases", handlers.ListReleases(s.releases))
+			r.Get("/{id}/releases/{releaseId}", handlers.GetRelease(s.releases))
+		})
 
 		// Authenticated mutating endpoints
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware.RequireIdentity)
+			r.Use(handlers.RequireRepoReadAccess(s.repos, s.identity.DID))
 			r.Post("/", handlers.CreateRepo(s.repos, s.webhooks))
 			r.Delete("/{id}", handlers.DeleteRepo(s.repos, s.webhooks))
 			r.Post("/{id}/fork", handlers.ForkRepo(s.repos, s.webhooks))
@@ -216,7 +221,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/{id}/issues/{issueId}/close", handlers.CloseIssue(s.issues, s.webhooks))
 			r.Post("/{id}/prs", handlers.OpenPR(s.prs, s.webhooks))
 			r.Post("/{id}/prs/{prId}/review", handlers.ReviewPR(s.prs, s.webhooks))
-			r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs, s.protection, s.webhooks))
+			r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs, s.repos, s.protection, s.webhooks))
 			r.Post("/{id}/branches", handlers.CreateBranch(s.repos))
 			r.Post("/{id}/labels", handlers.CreateLabel(s.labels))
 			r.Delete("/{id}/labels/{name}", handlers.DeleteLabel(s.labels))
@@ -300,7 +305,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"version":  version,
 		"peers":    0,
 		"repos":    len(s.repos.List()),
-		"agents":   1,
+		"agents":   len(s.agents.List()),
 		"uptime":   time.Since(s.startTime).String(),
 		"identity": s.identity.DID,
 	})

@@ -69,14 +69,17 @@ func CreateRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http
 	}
 }
 
-// ListRepos lists all repositories
-func ListRepos(registry *storage.RepositoryRegistry) http.HandlerFunc {
+// ListRepos lists all repositories visible to the caller.
+func ListRepos(registry *storage.RepositoryRegistry, serverDID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		offset, limit := ParsePagination(r)
 		repos := registry.List()
 
 		result := make([]map[string]interface{}, 0, len(repos))
 		for _, entry := range repos {
+			if !CanAccessRepo(r, entry, serverDID) {
+				continue
+			}
 			result = append(result, map[string]interface{}{
 				"id":          entry.ID,
 				"name":        entry.Name,

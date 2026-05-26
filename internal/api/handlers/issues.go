@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
@@ -51,9 +52,9 @@ func CreateIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc 
 		}
 
 		// Get author from context (set by auth middleware)
-		author := "anonymous"
-		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
-			author = did
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
 		}
 
 		issueID := fmt.Sprintf("issue-%d", time.Now().UnixNano())
@@ -171,9 +172,9 @@ func CommentIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc
 			return
 		}
 
-		author := "anonymous"
-		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
-			author = did
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
 		}
 
 		err := store.Update(repoID, issueID, func(issue *crdt.Issue) error {
@@ -211,9 +212,9 @@ func CloseIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc {
 		repoID := chi.URLParam(r, "id")
 		issueID := chi.URLParam(r, "issueId")
 
-		author := "anonymous"
-		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
-			author = did
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
 		}
 
 		err := store.Update(repoID, issueID, func(issue *crdt.Issue) error {

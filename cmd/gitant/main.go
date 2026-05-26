@@ -269,23 +269,11 @@ var backupCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// List of data files to back up
-		dataFiles := []string{
-			"identity.key",
-			"issues.json",
-			"pull_requests.json",
-			"labels.json",
-			"tasks.json",
-			"releases.json",
-			"blocks",
-			"agents",
-			"protections",
-			"webhooks.json",
-			"revocations.json",
-		}
+		// Backup the three top-level data units used by `gitant serve`.
+		backupItems := []string{"identity.key", "repos", "data"}
 
 		backedUp := 0
-		for _, name := range dataFiles {
+		for _, name := range backupItems {
 			src := filepath.Join(dataDir, name)
 			dst := filepath.Join(backupDir, name)
 

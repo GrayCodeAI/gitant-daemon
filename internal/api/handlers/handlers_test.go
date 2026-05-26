@@ -97,7 +97,7 @@ func TestListRepos(t *testing.T) {
 	reg.Create("repo1", "repo1", "first", false)
 	reg.Create("repo2", "repo2", "second", true)
 
-	handler := ListRepos(reg)
+	handler := ListRepos(reg, "")
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
 
@@ -109,8 +109,8 @@ func TestListRepos(t *testing.T) {
 
 	var result map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &result)
-	if int(result["total"].(float64)) != 2 {
-		t.Fatalf("expected 2 repos, got %v", result["total"])
+	if int(result["total"].(float64)) != 1 {
+		t.Fatalf("expected 1 public repo, got %v", result["total"])
 	}
 }
 
@@ -288,11 +288,30 @@ func TestListPRs(t *testing.T) {
 }
 
 func TestMergePR(t *testing.T) {
+	reg := setupTestRegistry(t)
+	if _, err := reg.Create("repo", "repo", "", false); err != nil {
+		t.Fatal(err)
+	}
+	gitRepo, err := reg.Open("repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := gitRepo.CreateBlob([]byte("feature content"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gitRepo.CreateBranch("feature", hash); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitRepo.CreateBranch("main", hash); err != nil {
+		t.Fatal(err)
+	}
+
 	store := setupTestPRStore(t)
 	store.Create("repo", "pr-1", "alice", "Feature", "", "feature", "main")
 
 	r := chiRouter()
-	r.Post("/{id}/prs/{prId}/merge", MergePR(store, nil, setupTestWebhookManager(t)))
+	r.Post("/{id}/prs/{prId}/merge", MergePR(store, reg, nil, setupTestWebhookManager(t)))
 
 	req := httptest.NewRequest("POST", "/repo/prs/pr-1/merge", nil)
 	w := httptest.NewRecorder()

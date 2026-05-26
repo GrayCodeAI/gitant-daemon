@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
@@ -50,9 +52,9 @@ func OpenPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFunc
 			return
 		}
 
-		author := "anonymous"
-		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
-			author = did
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
 		}
 
 		prID := fmt.Sprintf("pr-%d", time.Now().UnixNano())
@@ -179,9 +181,9 @@ func ReviewPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFu
 			return
 		}
 
-		author := "anonymous"
-		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
-			author = did
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
 		}
 
 		comment := fmt.Sprintf("Review [%s]: %s", req.Verdict, req.Body)
@@ -216,8 +218,8 @@ func ReviewPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFu
 	}
 }
 
-// MergePR merges a pull request
-func MergePR(store *crdt.PullRequestStore, protections *storage.ProtectionStore, wm *webhooks.Manager) http.HandlerFunc {
+// MergePR merges a pull request (fast-forward target branch, then mark merged).
+func MergePR(store *crdt.PullRequestStore, registry *storage.RepositoryRegistry, protections *storage.ProtectionStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		prID := chi.URLParam(r, "prId")
@@ -241,11 +243,9 @@ func MergePR(store *crdt.PullRequestStore, protections *storage.ProtectionStore,
 					hasApproval := false
 					for _, op := range pr.Log().Operations() {
 						if op.Type == crdt.OpAddComment {
-							if comment, ok := op.Data["comment"].(string); ok && len(comment) >= 7 && comment[:7] == "Review [" {
-								if len(comment) > 15 && comment[7:14] == "approve" {
-									hasApproval = true
-									break
-								}
+							if comment, ok := op.Data["comment"].(string); ok && strings.Contains(comment, "Review [approve]") {
+								hasApproval = true
+								break
 							}
 						}
 					}
@@ -258,9 +258,24 @@ func MergePR(store *crdt.PullRequestStore, protections *storage.ProtectionStore,
 			}
 		}
 
-		author := "anonymous"
-		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
-			author = did
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
+		}
+
+		repo, err := registry.Open(repoID)
+		if err != nil {
+			http.Error(w, "Repository not found", http.StatusNotFound)
+			return
+		}
+		sourceHash, err := repo.GetBranch(pr.SourceBranch)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Source branch not found: %v", err), http.StatusBadRequest)
+			return
+		}
+		if err := repo.CreateBranch(pr.TargetBranch, sourceHash); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to merge branch: %v", err), http.StatusInternalServerError)
+			return
 		}
 
 		err = store.Update(repoID, prID, func(pr *crdt.PullRequest) error {

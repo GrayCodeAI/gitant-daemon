@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 )
 
@@ -69,9 +70,9 @@ func CreateTask(store *crdt.TaskStore) http.HandlerFunc {
 			return
 		}
 
-		author := "anonymous"
-		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
-			author = did
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
 		}
 
 		taskID := fmt.Sprintf("task-%d", time.Now().UnixNano())
@@ -90,9 +91,9 @@ func ClaimTask(store *crdt.TaskStore) http.HandlerFunc {
 		repoID := chi.URLParam(r, "id")
 		taskID := chi.URLParam(r, "taskId")
 
-		author := "anonymous"
-		if did, ok := r.Context().Value("identity").(string); ok && did != "" {
-			author = did
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
 		}
 
 		if err := store.Claim(repoID, taskID, author); err != nil {

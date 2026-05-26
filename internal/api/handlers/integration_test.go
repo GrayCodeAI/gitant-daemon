@@ -28,7 +28,7 @@ func setupWorkflowRouter(t *testing.T) (*chi.Mux, *storage.RepositoryRegistry, *
 
 	// Repo CRUD
 	r.Post("/repos", CreateRepo(reg, wm))
-	r.Get("/repos", ListRepos(reg))
+	r.Get("/repos", ListRepos(reg, ""))
 	r.Get("/repos/{id}", GetRepo(reg))
 	r.Delete("/repos/{id}", DeleteRepo(reg, wm))
 
@@ -43,7 +43,7 @@ func setupWorkflowRouter(t *testing.T) (*chi.Mux, *storage.RepositoryRegistry, *
 	r.Get("/repos/{id}/prs", ListPRs(prStore))
 	r.Get("/repos/{id}/prs/{prId}", GetPR(prStore))
 	r.Post("/repos/{id}/prs/{prId}/review", ReviewPR(prStore, wm))
-	r.Post("/repos/{id}/prs/{prId}/merge", MergePR(prStore, protectionStore, wm))
+	r.Post("/repos/{id}/prs/{prId}/merge", MergePR(prStore, reg, protectionStore, wm))
 
 	// Labels
 	r.Post("/repos/{id}/labels", CreateLabel(labelStore))
@@ -282,7 +282,7 @@ func TestIntegrationWorkflow_IssueWorkflow(t *testing.T) {
 }
 
 func TestIntegrationWorkflow_PRWorkflow(t *testing.T) {
-	r, _, _, _, _, _, _ := setupWorkflowRouter(t)
+	r, reg, _, _, _, _, _ := setupWorkflowRouter(t)
 
 	// Step 1: Create a repo
 	body := `{"name":"pr-repo"}`
@@ -294,8 +294,22 @@ func TestIntegrationWorkflow_PRWorkflow(t *testing.T) {
 		t.Fatalf("create repo: expected 201, got %d", w.Code)
 	}
 
-	// Step 2: Open a PR (branch creation not required for the CRDT PR store)
-	body = `{"title":"Add dark mode","body":"Implements dark theme","source_branch":"feature/dark-mode","target_branch":"main"}`
+	gitRepo, err := reg.Open("pr-repo")
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	initHash, err := gitRepo.CreateBlob([]byte("initial"))
+	if err != nil {
+		t.Fatalf("create blob: %v", err)
+	}
+	for _, branch := range []string{"main", "feature", "fix-header"} {
+		if err := gitRepo.CreateBranch(branch, initHash); err != nil {
+			t.Fatalf("create branch %s: %v", branch, err)
+		}
+	}
+
+	// Step 2: Open a PR
+	body = `{"title":"Add dark mode","body":"Implements dark theme","source_branch":"feature","target_branch":"main"}`
 	req = httptest.NewRequest("POST", "/repos/pr-repo/prs", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
@@ -314,8 +328,8 @@ func TestIntegrationWorkflow_PRWorkflow(t *testing.T) {
 	if createdPR["title"] != "Add dark mode" {
 		t.Fatalf("expected title 'Add dark mode', got %v", createdPR["title"])
 	}
-	if createdPR["source_branch"] != "feature/dark-mode" {
-		t.Fatalf("expected source_branch 'feature/dark-mode', got %v", createdPR["source_branch"])
+	if createdPR["source_branch"] != "feature" {
+		t.Fatalf("expected source_branch 'feature', got %v", createdPR["source_branch"])
 	}
 	if createdPR["target_branch"] != "main" {
 		t.Fatalf("expected target_branch 'main', got %v", createdPR["target_branch"])
@@ -343,7 +357,7 @@ func TestIntegrationWorkflow_PRWorkflow(t *testing.T) {
 	}
 
 	// Step 4: Open a second PR and list all PRs
-	body = `{"title":"Fix header","source_branch":"fix/header","target_branch":"main"}`
+	body = `{"title":"Fix header","source_branch":"fix-header","target_branch":"main"}`
 	req = httptest.NewRequest("POST", "/repos/pr-repo/prs", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
