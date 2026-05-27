@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w" -o /gitant ./cmd/gitant/
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w" -o /git-remote-gitant ./cmd/git-remote-gitant/
 
 # Runtime stage
-FROM alpine:3.19
+FROM alpine:3.23
 
 RUN apk --no-cache add ca-certificates curl
 
