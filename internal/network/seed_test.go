@@ -41,10 +41,7 @@ func TestSeedNodeDiscovery(t *testing.T) {
 
 	// Wait for the node to discover and connect to the seed
 	deadline := time.After(5 * time.Second)
-	for {
-		if node.PeerCount() > 0 {
-			break
-		}
+	for node.PeerCount() == 0 {
 		select {
 		case <-deadline:
 			t.Fatalf("regular node did not discover seed node within 5s (peers: %d)", node.PeerCount())
@@ -102,10 +99,7 @@ func TestSeedNodeGossipRelay(t *testing.T) {
 
 	// Wait for both nodes to connect to the seed
 	deadline := time.After(5 * time.Second)
-	for {
-		if node1.PeerCount() > 0 && node2.PeerCount() > 0 {
-			break
-		}
+	for node1.PeerCount() == 0 || node2.PeerCount() == 0 {
 		select {
 		case <-deadline:
 			t.Fatalf("nodes did not connect to seed (n1 peers: %d, n2 peers: %d)", node1.PeerCount(), node2.PeerCount())

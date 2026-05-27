@@ -2,7 +2,6 @@ package crdt
 
 import (
 	"log/slog"
-	"sync"
 	"time"
 )
 
@@ -13,16 +12,7 @@ const (
 
 // Compactor periodically compacts operation logs to bound memory usage.
 type Compactor struct {
-	mu       sync.Mutex
-	issueOps logProvider
-	prOps    logProvider
-	stop     chan struct{}
-}
-
-// logProvider returns all operation logs that may need compaction.
-type logProvider interface {
-	AllIssueLogs() []*OperationLog
-	AllPRLogs() []*OperationLog
+	stop chan struct{}
 }
 
 // IssueLogProvider adapts IssueStore for the compactor.
