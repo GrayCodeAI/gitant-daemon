@@ -77,7 +77,7 @@ func (s *IssueStore) Get(repoID, issueID string) (*Issue, error) {
 	}
 
 	issue, ok := repo[issueID]
-	if !ok {
+	if !ok || issue.Tombstoned {
 		return nil, fmt.Errorf("issue not found: %s", issueID)
 	}
 
@@ -85,7 +85,7 @@ func (s *IssueStore) Get(repoID, issueID string) (*Issue, error) {
 	return &copy, nil
 }
 
-// List returns all issues in a repository
+// List returns all non-tombstoned issues in a repository
 func (s *IssueStore) List(repoID string) []*Issue {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -97,13 +97,16 @@ func (s *IssueStore) List(repoID string) []*Issue {
 
 	result := make([]*Issue, 0, len(repo))
 	for _, issue := range repo {
+		if issue.Tombstoned {
+			continue
+		}
 		copy := *issue
 		result = append(result, &copy)
 	}
 	return result
 }
 
-// Delete removes an issue
+// Delete tombstones an issue
 func (s *IssueStore) Delete(repoID, issueID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,11 +116,12 @@ func (s *IssueStore) Delete(repoID, issueID string) error {
 		return fmt.Errorf("repository not found: %s", repoID)
 	}
 
-	if _, ok := repo[issueID]; !ok {
+	issue, ok := repo[issueID]
+	if !ok {
 		return fmt.Errorf("issue not found: %s", issueID)
 	}
 
-	delete(repo, issueID)
+	issue.Tombstone("system")
 	return s.saveLocked()
 }
 

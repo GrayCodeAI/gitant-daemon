@@ -18,6 +18,19 @@ const (
 	OpRemoveLabel OperationType = "remove_label"
 	OpSetBranch   OperationType = "set_branch"
 	OpSetAssignee OperationType = "set_assignee"
+
+	// Label operations
+	OpSetColor  OperationType = "set_color"
+	OpDeleteLabel OperationType = "delete_label"
+
+	// Task operations
+	OpClaimTask    OperationType = "claim_task"
+	OpCompleteTask OperationType = "complete_task"
+	OpFailTask     OperationType = "fail_task"
+	OpSetResult    OperationType = "set_result"
+
+	// Tombstone
+	OpTombstone OperationType = "tombstone"
 )
 
 // Status represents the status of an issue or PR

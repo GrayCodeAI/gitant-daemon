@@ -10,6 +10,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
+	"github.com/lakshmanpatel/gitant/internal/identity"
 )
 
 const (
@@ -27,6 +28,7 @@ type NodeConfig struct {
 	BootstrapPeers []string
 	ServerDID      string
 	HTTPPort       int
+	Identity       *identity.Identity
 }
 
 // FederatedEvent is a repo event replicated over GossipSub.
@@ -54,6 +56,7 @@ type Node struct {
 	Host            *Host
 	DHT             *DHT
 	Gossip          *GossipSub
+	PeerMgr         *PeerManager
 	cfg             NodeConfig
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -128,6 +131,8 @@ func StartNode(ctx context.Context, cfg NodeConfig) (*Node, error) {
 		go node.federationAnnounceLoop()
 	}
 
+	node.PeerMgr = NewPeerManager(node)
+
 	slog.Info("P2P network started",
 		"peer_id", host.ID().String(),
 		"listen_addrs", node.AdvertisedAddrs(),
@@ -156,8 +161,19 @@ func (n *Node) startEventSubscriber() error {
 				continue
 			}
 
+			payload := msg.Data
+			var env SignedEnvelope
+			if err := json.Unmarshal(msg.Data, &env); err == nil && env.SourceDID != "" && env.Signature != nil {
+				verified, err := VerifyEnvelope(&env)
+				if err != nil {
+					slog.Debug("invalid signed federated event, dropping", "error", err)
+					continue
+				}
+				payload = verified
+			}
+
 			var event FederatedEvent
-			if err := json.Unmarshal(msg.Data, &event); err != nil {
+			if err := json.Unmarshal(payload, &event); err != nil {
 				slog.Debug("invalid federated event payload", "error", err)
 				continue
 			}
@@ -315,6 +331,77 @@ func (n *Node) LocalFederationRecord() FederationRecord {
 	}
 }
 
+// StartSeedNode creates a lightweight P2P-only node (no HTTP) for DHT seeding.
+func StartSeedNode(ctx context.Context, cfg NodeConfig) (*Node, error) {
+	if cfg.ListenAddr == "" {
+		cfg.ListenAddr = defaultListenAddr
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+
+	host, err := NewHost(ctx, &Config{
+		ListenAddr: cfg.ListenAddr,
+		EnableMDNS: false,
+	})
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("starting seed host: %w", err)
+	}
+
+	dht, err := NewDHT(ctx, host)
+	if err != nil {
+		host.Close()
+		cancel()
+		return nil, fmt.Errorf("starting seed DHT: %w", err)
+	}
+
+	gossip, err := NewGossipSub(ctx, host)
+	if err != nil {
+		dht.Close()
+		host.Close()
+		cancel()
+		return nil, fmt.Errorf("starting seed GossipSub: %w", err)
+	}
+
+	node := &Node{
+		Host:   host,
+		DHT:    dht,
+		Gossip: gossip,
+		cfg:    cfg,
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	for _, addr := range cfg.BootstrapPeers {
+		if addr == "" {
+			continue
+		}
+		connectCtx, connectCancel := context.WithTimeout(ctx, 15*time.Second)
+		if err := host.Connect(connectCtx, addr); err != nil {
+			slog.Debug("seed bootstrap connect failed", "addr", addr, "error", err)
+		}
+		connectCancel()
+	}
+
+	if err := node.startEventSubscriber(); err != nil {
+		node.Close()
+		return nil, err
+	}
+
+	if cfg.ServerDID != "" {
+		go node.federationAnnounceLoop()
+	}
+
+	node.PeerMgr = NewPeerManager(node)
+
+	slog.Info("seed node started",
+		"peer_id", host.ID().String(),
+		"listen_addrs", node.AdvertisedAddrs(),
+	)
+
+	return node, nil
+}
+
 // PublishRepoEvent broadcasts an event on global and repo-specific topics.
 func (n *Node) PublishRepoEvent(repoID string, event FederatedEvent) error {
 	if n == nil || n.Gossip == nil || repoID == "" {
@@ -333,6 +420,15 @@ func (n *Node) PublishRepoEvent(repoID string, event FederatedEvent) error {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return err
+	}
+
+	if n.cfg.Identity != nil {
+		env, err := SignMessage(n.cfg.Identity, data)
+		if err != nil {
+			slog.Warn("failed to sign federated event", "error", err)
+		} else {
+			data, _ = json.Marshal(env)
+		}
 	}
 
 	if err := n.Gossip.Publish(GlobalEventsTopic, data); err != nil {
@@ -431,6 +527,9 @@ func (n *Node) Close() error {
 		return nil
 	}
 	n.cancel()
+	if n.PeerMgr != nil {
+		n.PeerMgr.Stop()
+	}
 	if n.subscription != nil {
 		n.subscription.Cancel()
 	}

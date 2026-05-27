@@ -345,6 +345,7 @@ const (
 	EventComment      = "comment"
 	EventRelease      = "release"
 	EventNotification = "notification"
+	EventFederated    = "federated"
 )
 
 // NotifyIssueCreated notifies clients about a new issue
@@ -368,6 +369,19 @@ func (h *Hub) NotifyPush(repoID string, push interface{}) {
 	h.BroadcastToRepo(repoID, Message{
 		Type:    EventPush,
 		Payload: push,
+	})
+}
+
+// BroadcastFederated broadcasts a federated P2P event to all connected WebSocket clients.
+func (h *Hub) BroadcastFederated(eventType, repo string, data interface{}) {
+	h.BroadcastAll(Message{
+		Type: EventFederated,
+		Payload: map[string]interface{}{
+			"type":      eventType,
+			"repo":      repo,
+			"data":      data,
+			"timestamp": time.Now().Format(time.RFC3339),
+		},
 	})
 }
 

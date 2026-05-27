@@ -33,7 +33,7 @@ func setupAuthIntegrationRouter(t *testing.T) (*chi.Mux, *identity.Identity) {
 	}
 
 	r := chi.NewRouter()
-	r.Use(authMiddleware.NewHTTPSignatureMiddleware(revocations, serverID.DID))
+	r.Use(authMiddleware.NewHTTPSignatureMiddleware(revocations, nil, serverID.DID))
 
 	r.Route("/api/v1/repos", func(r chi.Router) {
 		r.Group(func(r chi.Router) {

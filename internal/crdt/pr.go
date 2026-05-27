@@ -18,6 +18,7 @@ type prSnapshot struct {
 	Labels       []string     `json:"labels"`
 	Assignee     string       `json:"assignee"`
 	Reviewers    []string     `json:"reviewers"`
+	Tombstoned   bool         `json:"tombstoned,omitempty"`
 	CreatedAt    time.Time    `json:"created_at"`
 	UpdatedAt    time.Time    `json:"updated_at"`
 	Log          []*Operation `json:"log"`
@@ -36,6 +37,7 @@ func (pr *PullRequest) MarshalJSON() ([]byte, error) {
 		Labels:       pr.Labels,
 		Assignee:     pr.Assignee,
 		Reviewers:    pr.Reviewers,
+		Tombstoned:   pr.Tombstoned,
 		CreatedAt:    pr.CreatedAt,
 		UpdatedAt:    pr.UpdatedAt,
 		Log:          pr.log.Operations(),
@@ -65,6 +67,7 @@ func (pr *PullRequest) UnmarshalJSON(data []byte) error {
 	if pr.Reviewers == nil {
 		pr.Reviewers = make([]string, 0)
 	}
+	pr.Tombstoned = snap.Tombstoned
 	pr.CreatedAt = snap.CreatedAt
 	pr.UpdatedAt = snap.UpdatedAt
 	pr.log = NewOperationLog()
@@ -86,6 +89,7 @@ type PullRequest struct {
 	Labels       []string
 	Assignee     string // DID
 	Reviewers    []string // DIDs
+	Tombstoned   bool
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	log          *OperationLog
@@ -280,6 +284,18 @@ func (pr *PullRequest) SetBranch(author, sourceBranch, targetBranch string) {
 	})
 }
 
+// Tombstone marks this PR as deleted
+func (pr *PullRequest) Tombstone(author string) {
+	pr.Tombstoned = true
+	pr.UpdatedAt = time.Now()
+
+	pr.log.Add(&Operation{
+		ID:     generateID(),
+		Type:   OpTombstone,
+		Author: author,
+	})
+}
+
 // Log returns the operation log
 func (pr *PullRequest) Log() *OperationLog {
 	return pr.log
@@ -316,6 +332,7 @@ func (pr *PullRequest) Merge(other *PullRequest) {
 	// Reset state and re-apply
 	pr.Labels = make([]string, 0)
 	pr.Reviewers = make([]string, 0)
+	pr.Tombstoned = false
 	pr.applyOperations(allOps)
 }
 
@@ -381,6 +398,8 @@ func (pr *PullRequest) applyOperations(ops []*Operation) {
 			if targetBranch, ok := op.Data["target_branch"].(string); ok {
 				pr.TargetBranch = targetBranch
 			}
+		case OpTombstone:
+			pr.Tombstoned = true
 		}
 	}
 }

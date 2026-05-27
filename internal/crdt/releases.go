@@ -243,3 +243,59 @@ func (s *ReleaseStore) Delete(repoID, releaseID string) error {
 	delete(s.releases[repoID], releaseID)
 	return s.saveLocked()
 }
+
+// Merge merges another release's operations into this one
+func (r *Release) Merge(other *Release) {
+	r.log.clock.Merge(other.log.clock)
+
+	existingIDs := make(map[string]bool)
+	for _, op := range r.log.Operations() {
+		existingIDs[op.ID] = true
+	}
+	for _, op := range other.log.Operations() {
+		if !existingIDs[op.ID] {
+			r.log.ImportOperation(op)
+		}
+	}
+
+	allOps := make([]*Operation, len(r.log.Operations()))
+	copy(allOps, r.log.Operations())
+	sort.Slice(allOps, func(a, b int) bool {
+		if allOps[a].Lamport != allOps[b].Lamport {
+			return allOps[a].Lamport < allOps[b].Lamport
+		}
+		return allOps[a].Timestamp.Before(allOps[b].Timestamp)
+	})
+
+	// Replay title/body from ops
+	for _, op := range allOps {
+		switch op.Type {
+		case OpSetTitle:
+			if title, ok := op.Data["title"].(string); ok {
+				r.Title = title
+			}
+		case OpSetBody:
+			if body, ok := op.Data["body"].(string); ok {
+				r.Body = body
+			}
+		}
+	}
+}
+
+// MergeRemote merges a remote release snapshot into the local store
+func (s *ReleaseStore) MergeRemote(repoID string, remote *Release) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.releases[repoID]; !ok {
+		s.releases[repoID] = make(map[string]*Release)
+	}
+
+	if local, ok := s.releases[repoID][remote.ID]; ok {
+		local.Merge(remote)
+	} else {
+		cp := *remote
+		s.releases[repoID][remote.ID] = &cp
+	}
+	return s.saveLocked()
+}

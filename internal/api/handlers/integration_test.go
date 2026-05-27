@@ -4,16 +4,24 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
 // setupWorkflowRouter creates a full chi mux with all API routes needed for integration testing.
+func setupTestReleaseStore(t *testing.T) *crdt.ReleaseStore {
+	t.Helper()
+	return crdt.NewReleaseStore("")
+}
+
 func setupWorkflowRouter(t *testing.T) (*chi.Mux, *storage.RepositoryRegistry, *crdt.IssueStore, *crdt.PullRequestStore, *crdt.TaskStore, *crdt.LabelStore, *storage.ProtectionStore) {
 	t.Helper()
 	reg := setupTestRegistry(t)
@@ -21,6 +29,7 @@ func setupWorkflowRouter(t *testing.T) (*chi.Mux, *storage.RepositoryRegistry, *
 	prStore := setupTestPRStore(t)
 	labelStore := setupTestLabelStore(t)
 	taskStore := setupTestTaskStore(t)
+	releaseStore := setupTestReleaseStore(t)
 	protectionStore := setupTestProtectionStore(t)
 	wm := setupTestWebhookManager(t)
 
@@ -46,21 +55,40 @@ func setupWorkflowRouter(t *testing.T) (*chi.Mux, *storage.RepositoryRegistry, *
 	r.Post("/repos/{id}/prs/{prId}/merge", MergePR(prStore, reg, protectionStore, wm))
 
 	// Labels
-	r.Post("/repos/{id}/labels", CreateLabel(labelStore))
+	r.Post("/repos/{id}/labels", CreateLabel(labelStore, wm))
 	r.Get("/repos/{id}/labels", ListLabels(labelStore))
-	r.Delete("/repos/{id}/labels/{name}", DeleteLabel(labelStore))
+	r.Delete("/repos/{id}/labels/{name}", DeleteLabel(labelStore, wm))
 
 	// Tasks
-	r.Post("/repos/{id}/tasks", CreateTask(taskStore))
+	r.Post("/repos/{id}/tasks", CreateTask(taskStore, wm))
 	r.Get("/repos/{id}/tasks", ListTasks(taskStore))
-	r.Post("/repos/{id}/tasks/{taskId}/claim", ClaimTask(taskStore))
-	r.Post("/repos/{id}/tasks/{taskId}/complete", CompleteTask(taskStore))
+	r.Post("/repos/{id}/tasks/{taskId}/claim", ClaimTask(taskStore, wm))
+	r.Post("/repos/{id}/tasks/{taskId}/complete", CompleteTask(taskStore, wm))
+
+	// Releases
+	r.Post("/repos/{id}/releases", CreateRelease(releaseStore, wm))
+	r.Get("/repos/{id}/releases", ListReleases(releaseStore))
+	r.Get("/repos/{id}/releases/{releaseId}", GetRelease(releaseStore))
+	r.Delete("/repos/{id}/releases/{releaseId}", DeleteRelease(releaseStore, wm))
 
 	// Branch protections
 	r.Post("/repos/{id}/protections/{branch}", SetProtection(protectionStore))
 	r.Get("/repos/{id}/protections", ListProtections(protectionStore))
 	r.Get("/repos/{id}/protections/{branch}", GetProtection(protectionStore))
 	r.Delete("/repos/{id}/protections/{branch}", RemoveProtection(protectionStore))
+
+	// Stars
+	r.Post("/repos/{id}/star", StarRepo(reg))
+	r.Post("/repos/{id}/unstar", UnstarRepo(reg))
+	r.Get("/repos/{id}/stars", GetStarCount(reg))
+
+	// Commits & diff
+	r.Get("/repos/{id}/commits", GetCommitLog(reg))
+	r.Get("/repos/{id}/diff", DiffCommits(reg))
+	r.Get("/repos/{id}/diff/patch", GetDiff(reg))
+
+	// Search
+	r.Get("/repos/{id}/search", SearchCode(reg))
 
 	return r, reg, issueStore, prStore, taskStore, labelStore, protectionStore
 }
@@ -809,6 +837,419 @@ func TestIntegrationWorkflow_BranchProtection(t *testing.T) {
 	remaining := protections[0].(map[string]interface{})
 	if remaining["branch"] != "develop" {
 		t.Fatalf("expected remaining protection on 'develop', got %v", remaining["branch"])
+	}
+}
+
+func TestIntegrationWorkflow_ReleaseWorkflow(t *testing.T) {
+	r, _, _, _, _, _, _ := setupWorkflowRouter(t)
+
+	// Step 1: Create a repo
+	body := `{"name":"release-repo"}`
+	req := httptest.NewRequest("POST", "/repos", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create repo: expected 201, got %d", w.Code)
+	}
+
+	// Step 2: Create a release
+	body = `{"tag":"v1.0.0","title":"First Release","body":"Initial stable release"}`
+	req = httptest.NewRequest("POST", "/repos/release-repo/releases", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create release: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var createdRelease map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &createdRelease)
+	releaseID := createdRelease["id"].(string)
+	if releaseID == "" {
+		t.Fatal("expected non-empty release id")
+	}
+	if createdRelease["tag"] != "v1.0.0" {
+		t.Fatalf("expected tag 'v1.0.0', got %v", createdRelease["tag"])
+	}
+	if createdRelease["title"] != "First Release" {
+		t.Fatalf("expected title 'First Release', got %v", createdRelease["title"])
+	}
+
+	// Step 3: Create a second release
+	body = `{"tag":"v1.1.0","title":"Second Release"}`
+	req = httptest.NewRequest("POST", "/repos/release-repo/releases", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create second release: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Step 4: List releases
+	req = httptest.NewRequest("GET", "/repos/release-repo/releases", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("list releases: expected 200, got %d", w.Code)
+	}
+
+	var listResult map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &listResult)
+	releases := listResult["releases"].([]interface{})
+	if len(releases) != 2 {
+		t.Fatalf("expected 2 releases, got %d", len(releases))
+	}
+
+	// Step 5: Get a specific release
+	req = httptest.NewRequest("GET", "/repos/release-repo/releases/"+releaseID, nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("get release: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var fetchedRelease map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &fetchedRelease)
+	if fetchedRelease["tag"] != "v1.0.0" {
+		t.Fatalf("expected tag 'v1.0.0', got %v", fetchedRelease["tag"])
+	}
+
+	// Step 6: Delete a release
+	req = httptest.NewRequest("DELETE", "/repos/release-repo/releases/"+releaseID, nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete release: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Step 7: Verify it's gone
+	req = httptest.NewRequest("GET", "/repos/release-repo/releases", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	json.Unmarshal(w.Body.Bytes(), &listResult)
+	releases = listResult["releases"].([]interface{})
+	if len(releases) != 1 {
+		t.Fatalf("expected 1 release after delete, got %d", len(releases))
+	}
+
+	// Verify deleted release returns 404
+	req = httptest.NewRequest("GET", "/repos/release-repo/releases/"+releaseID, nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("get deleted release: expected 404, got %d", w.Code)
+	}
+}
+
+func TestIntegrationWorkflow_StarWorkflow(t *testing.T) {
+	r, _, _, _, _, _, _ := setupWorkflowRouter(t)
+
+	// Step 1: Create a repo
+	body := `{"name":"star-repo"}`
+	req := httptest.NewRequest("POST", "/repos", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create repo: expected 201, got %d", w.Code)
+	}
+
+	// Step 2: Check initial star count
+	req = httptest.NewRequest("GET", "/repos/star-repo/stars", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("get stars: expected 200, got %d", w.Code)
+	}
+
+	var starsResult map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &starsResult)
+	if int(starsResult["stars"].(float64)) != 0 {
+		t.Fatalf("expected 0 stars initially, got %v", starsResult["stars"])
+	}
+
+	// Step 3: Star the repo
+	req = httptest.NewRequest("POST", "/repos/star-repo/star", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("star repo: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var starResult map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &starResult)
+	if starResult["success"] != true {
+		t.Fatalf("expected success=true, got %v", starResult["success"])
+	}
+	if int(starResult["stars"].(float64)) != 1 {
+		t.Fatalf("expected 1 star after starring, got %v", starResult["stars"])
+	}
+
+	// Step 4: Verify star count
+	req = httptest.NewRequest("GET", "/repos/star-repo/stars", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	json.Unmarshal(w.Body.Bytes(), &starsResult)
+	if int(starsResult["stars"].(float64)) != 1 {
+		t.Fatalf("expected 1 star, got %v", starsResult["stars"])
+	}
+
+	// Step 5: Unstar the repo
+	req = httptest.NewRequest("POST", "/repos/star-repo/unstar", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("unstar repo: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var unstarResult map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &unstarResult)
+	if unstarResult["success"] != true {
+		t.Fatalf("expected success=true, got %v", unstarResult["success"])
+	}
+	if int(unstarResult["stars"].(float64)) != 0 {
+		t.Fatalf("expected 0 stars after unstarring, got %v", unstarResult["stars"])
+	}
+
+	// Step 6: Star a non-existent repo returns 404
+	req = httptest.NewRequest("POST", "/repos/no-such-repo/star", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("star non-existent repo: expected 404, got %d", w.Code)
+	}
+}
+
+func TestIntegrationWorkflow_CommitAndDiff(t *testing.T) {
+	r, reg, _, _, _, _, _ := setupWorkflowRouter(t)
+
+	// Step 1: Create a repo
+	body := `{"name":"commit-repo"}`
+	req := httptest.NewRequest("POST", "/repos", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create repo: expected 201, got %d", w.Code)
+	}
+
+	gitRepo, err := reg.Open("commit-repo")
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+
+	// Step 2: Create first commit with a file
+	blob1, err := gitRepo.CreateBlob([]byte("hello world\n"))
+	if err != nil {
+		t.Fatalf("create blob1: %v", err)
+	}
+	tree1, err := gitRepo.CreateTree([]storage.TreeEntry{
+		{Name: "README.md", Hash: blob1, Mode: filemode.Regular},
+	})
+	if err != nil {
+		t.Fatalf("create tree1: %v", err)
+	}
+	commit1, err := gitRepo.CreateCommit(tree1, nil, "alice", "Initial commit")
+	if err != nil {
+		t.Fatalf("create commit1: %v", err)
+	}
+	if err := gitRepo.CreateBranch("main", commit1); err != nil {
+		t.Fatalf("create main branch: %v", err)
+	}
+
+	// Step 3: Create second commit with updated file
+	blob2, err := gitRepo.CreateBlob([]byte("hello world\nupdated content\n"))
+	if err != nil {
+		t.Fatalf("create blob2: %v", err)
+	}
+	tree2, err := gitRepo.CreateTree([]storage.TreeEntry{
+		{Name: "README.md", Hash: blob2, Mode: filemode.Regular},
+	})
+	if err != nil {
+		t.Fatalf("create tree2: %v", err)
+	}
+	commit2, err := gitRepo.CreateCommit(tree2, []plumbing.Hash{commit1}, "bob", "Update README")
+	if err != nil {
+		t.Fatalf("create commit2: %v", err)
+	}
+	// Move main to second commit
+	if err := gitRepo.CreateBranch("main", commit2); err != nil {
+		t.Fatalf("update main branch: %v", err)
+	}
+
+	// Step 4: Get commit log
+	req = httptest.NewRequest("GET", "/repos/commit-repo/commits", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("get commit log: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var logResult map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &logResult)
+	commits := logResult["commits"].([]interface{})
+	if len(commits) < 2 {
+		t.Fatalf("expected at least 2 commits, got %d", len(commits))
+	}
+	total := int(logResult["total"].(float64))
+	if total < 2 {
+		t.Fatalf("expected total >= 2, got %d", total)
+	}
+
+	// Verify commit messages
+	firstCommit := commits[0].(map[string]interface{})
+	msg := strings.TrimSpace(firstCommit["message"].(string))
+	if msg != "Update README" {
+		t.Fatalf("expected first commit message 'Update README', got %q", msg)
+	}
+
+	// Step 5: Diff between two commits
+	diffURL := "/repos/commit-repo/diff?from=" + commit1.String() + "&to=" + commit2.String()
+	req = httptest.NewRequest("GET", diffURL, nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("diff commits: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var diffResult map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &diffResult)
+	changes, ok := diffResult["changes"].([]interface{})
+	if !ok || len(changes) == 0 {
+		t.Fatalf("expected changes in diff result, got: %v", diffResult)
+	}
+
+	// Step 6: Get diff patch
+	patchURL := "/repos/commit-repo/diff/patch?from=" + commit1.String() + "&to=" + commit2.String()
+	req = httptest.NewRequest("GET", patchURL, nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("get diff patch: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var patchResult map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &patchResult)
+	patch, ok := patchResult["patch"].(string)
+	if !ok {
+		t.Fatal("expected patch string in response")
+	}
+	if patch == "" {
+		t.Fatal("expected non-empty patch")
+	}
+
+	// Step 7: Commit log on non-existent repo returns 404
+	req = httptest.NewRequest("GET", "/repos/no-such-repo/commits", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("commit log non-existent repo: expected 404, got %d", w.Code)
+	}
+}
+
+func TestIntegrationWorkflow_Search(t *testing.T) {
+	r, reg, _, _, _, _, _ := setupWorkflowRouter(t)
+
+	// Step 1: Create a repo
+	body := `{"name":"search-repo"}`
+	req := httptest.NewRequest("POST", "/repos", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create repo: expected 201, got %d", w.Code)
+	}
+
+	gitRepo, err := reg.Open("search-repo")
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+
+	// Step 2: Create a commit with searchable content
+	blob, err := gitRepo.CreateBlob([]byte("package main\n\nfunc main() {\n\tfmt.Println(\"hello world\")\n}\n"))
+	if err != nil {
+		t.Fatalf("create blob: %v", err)
+	}
+	tree, err := gitRepo.CreateTree([]storage.TreeEntry{
+		{Name: "main.go", Hash: blob, Mode: filemode.Regular},
+	})
+	if err != nil {
+		t.Fatalf("create tree: %v", err)
+	}
+	commitHash, err := gitRepo.CreateCommit(tree, nil, "alice", "Add main.go")
+	if err != nil {
+		t.Fatalf("create commit: %v", err)
+	}
+	if err := gitRepo.CreateBranch("main", commitHash); err != nil {
+		t.Fatalf("create main branch: %v", err)
+	}
+
+	// Step 3: Search for existing content
+	req = httptest.NewRequest("GET", "/repos/search-repo/search?q=hello", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("search: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var searchResult map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &searchResult)
+	if searchResult["query"] != "hello" {
+		t.Fatalf("expected query 'hello', got %v", searchResult["query"])
+	}
+	results := searchResult["results"].([]interface{})
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 search result")
+	}
+
+	// Step 4: Search for non-existing content
+	req = httptest.NewRequest("GET", "/repos/search-repo/search?q=nonexistent", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("search no results: expected 200, got %d", w.Code)
+	}
+
+	json.Unmarshal(w.Body.Bytes(), &searchResult)
+	results = searchResult["results"].([]interface{})
+	if len(results) != 0 {
+		t.Fatalf("expected 0 search results for nonexistent query, got %d", len(results))
+	}
+
+	// Step 5: Search without query returns 400
+	req = httptest.NewRequest("GET", "/repos/search-repo/search", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("search without query: expected 400, got %d", w.Code)
+	}
+
+	// Step 6: Search on non-existent repo returns 404
+	req = httptest.NewRequest("GET", "/repos/no-such-repo/search?q=test", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("search non-existent repo: expected 404, got %d", w.Code)
 	}
 }
 

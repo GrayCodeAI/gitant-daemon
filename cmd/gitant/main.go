@@ -18,6 +18,7 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/ipfs"
 	"github.com/lakshmanpatel/gitant/internal/network"
 	"github.com/lakshmanpatel/gitant/internal/storage"
+	"github.com/lakshmanpatel/gitant/internal/store"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 	"github.com/spf13/cobra"
 )
@@ -141,6 +142,11 @@ var serveCmd = &cobra.Command{
 			slog.Warn("failed to load revocations", "error", err)
 		}
 
+		// Start CRDT operation log compactor
+		compactor := crdt.NewCompactor()
+		compactor.Start(0) // use default 6h interval
+		defer compactor.Stop()
+
 		// Parse CORS origins from environment
 		var corsOrigins []string
 		if envOrigins := os.Getenv("GITANT_CORS_ORIGINS"); envOrigins != "" {
@@ -153,6 +159,11 @@ var serveCmd = &cobra.Command{
 
 		// Create server
 		server := api.NewServer(port, id, repos, issueStore, prStore, blockstore, labelStore, taskStore, releaseStore, protectionStore, webhookManager, revocationStore, dataStoreDir, corsOrigins)
+
+		// Wire up auth service (in-memory stores with JSON persistence for users)
+		userStore := store.NewMemoryUserStore(filepath.Join(dataStoreDir, "users.json"))
+		sessionStore := store.NewMemorySessionStore()
+		server.SetAuthService(store.NewAuthService(userStore, sessionStore))
 
 		p2pEnabled, _ := cmd.Flags().GetBool("p2p")
 		if envP2P := os.Getenv("GITANT_P2P"); envP2P != "" {
@@ -173,6 +184,7 @@ var serveCmd = &cobra.Command{
 				BootstrapPeers: bootstrapPeers,
 				ServerDID:      id.DID,
 				HTTPPort:       port,
+				Identity:       id,
 			})
 			if err != nil {
 				slog.Warn("P2P startup failed, continuing HTTP-only", "error", err)
@@ -221,6 +233,52 @@ var serveCmd = &cobra.Command{
 			slog.Error("shutdown error", "error", err)
 			os.Exit(1)
 		}
+	},
+}
+
+var seedCmd = &cobra.Command{
+	Use:   "seed",
+	Short: "Run a P2P seed node (no HTTP API)",
+	Long:  "Start a lightweight P2P-only node that participates in DHT and GossipSub for federation discovery.",
+	Run: func(cmd *cobra.Command, args []string) {
+		logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		}))
+		slog.SetDefault(logger)
+
+		dataDir, _ := cmd.Flags().GetString("data-dir")
+		if dataDir == "" {
+			dataDir = filepath.Join(os.Getenv("HOME"), ".gitant")
+		}
+
+		id, err := identity.LoadIdentity(filepath.Join(dataDir, "identity.key"))
+		if err != nil {
+			slog.Error("failed to load identity", "error", err)
+			os.Exit(1)
+		}
+
+		p2pListen, _ := cmd.Flags().GetString("p2p-listen")
+		bootstrapPeers, _ := cmd.Flags().GetStringSlice("bootstrap-peers")
+		bootstrapPeers = network.MergeBootstrapPeers(bootstrapPeers)
+
+		node, err := network.StartSeedNode(context.Background(), network.NodeConfig{
+			ListenAddr:     p2pListen,
+			BootstrapPeers: bootstrapPeers,
+			ServerDID:      id.DID,
+			Identity:       id,
+		})
+		if err != nil {
+			slog.Error("seed node failed to start", "error", err)
+			os.Exit(1)
+		}
+		defer node.Close()
+
+		slog.Info("seed node running", "peer_id", node.Host.ID().String(), "addrs", node.AdvertisedAddrs())
+
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		slog.Info("seed node shutting down")
 	},
 }
 
@@ -448,6 +506,10 @@ func init() {
 	serveCmd.Flags().StringSlice("bootstrap-peers", nil, "Bootstrap peer multiaddrs (repeatable)")
 	serveCmd.Flags().Bool("ipfs-pin", false, "Pin replicated git objects in warm IPFS storage")
 
+	seedCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")
+	seedCmd.Flags().String("p2p-listen", "/ip4/0.0.0.0/tcp/4001", "libp2p listen multiaddr")
+	seedCmd.Flags().StringSlice("bootstrap-peers", nil, "Bootstrap peer multiaddrs (repeatable)")
+
 	pushCmd.Flags().StringP("remote", "r", "http://localhost:7777", "Remote daemon URL")
 	pushCmd.Flags().String("repo", "", "Repository name (required)")
 	pushCmd.MarkFlagRequired("repo")
@@ -457,6 +519,7 @@ func init() {
 	cloneCmd.Flags().StringP("remote", "r", "http://localhost:7777", "Remote daemon URL")
 
 	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(seedCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(pushCmd)

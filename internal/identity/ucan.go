@@ -163,6 +163,45 @@ func (u *UCAN) HasCapability(resource, action string) bool {
 	return false
 }
 
+// CapabilitiesSubset checks whether every capability in child is permitted by parent.
+// A child action is permitted if the parent has a matching resource with action "*"
+// or the exact same action. A child resource is permitted if the parent has that
+// resource or a wildcard "*".
+func CapabilitiesSubset(child, parent []Capability) bool {
+	for _, cc := range child {
+		matched := false
+		for _, pc := range parent {
+			if pc.Resource == "*" || pc.Resource == cc.Resource {
+				// Parent resource matches — check every child action
+				allActionsCovered := true
+				for _, ca := range cc.Actions {
+					if !actionAllowed(ca, pc.Actions) {
+						allActionsCovered = false
+						break
+					}
+				}
+				if allActionsCovered {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func actionAllowed(action string, allowed []string) bool {
+	for _, a := range allowed {
+		if a == "*" || a == action {
+			return true
+		}
+	}
+	return false
+}
+
 // generateNonce generates a random nonce
 func generateNonce() string {
 	b := make([]byte, 16)

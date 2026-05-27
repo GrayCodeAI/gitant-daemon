@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
+	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
 // ListTasks lists tasks for a repository
@@ -19,7 +20,6 @@ func ListTasks(store *crdt.TaskStore) http.HandlerFunc {
 
 		tasks := store.List(repoID, status)
 
-		// Convert to map slice for pagination
 		result := make([]map[string]interface{}, len(tasks))
 		for i, task := range tasks {
 			result[i] = map[string]interface{}{
@@ -50,7 +50,7 @@ func ListTasks(store *crdt.TaskStore) http.HandlerFunc {
 }
 
 // CreateTask creates a new task
-func CreateTask(store *crdt.TaskStore) http.HandlerFunc {
+func CreateTask(store *crdt.TaskStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 
@@ -80,6 +80,16 @@ func CreateTask(store *crdt.TaskStore) http.HandlerFunc {
 			slog.Error("failed to persist task", "error", err)
 		}
 
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventTaskCreated,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"task_id": taskID,
+				"title":   req.Title,
+				"author":  author,
+			},
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(task)
@@ -87,7 +97,7 @@ func CreateTask(store *crdt.TaskStore) http.HandlerFunc {
 }
 
 // ClaimTask claims a task
-func ClaimTask(store *crdt.TaskStore) http.HandlerFunc {
+func ClaimTask(store *crdt.TaskStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		taskID := chi.URLParam(r, "taskId")
@@ -102,6 +112,15 @@ func ClaimTask(store *crdt.TaskStore) http.HandlerFunc {
 			return
 		}
 
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventTaskClaimed,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"task_id": taskID,
+				"author":  author,
+			},
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
@@ -112,7 +131,7 @@ func ClaimTask(store *crdt.TaskStore) http.HandlerFunc {
 }
 
 // CompleteTask completes a task
-func CompleteTask(store *crdt.TaskStore) http.HandlerFunc {
+func CompleteTask(store *crdt.TaskStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		taskID := chi.URLParam(r, "taskId")
@@ -128,6 +147,15 @@ func CompleteTask(store *crdt.TaskStore) http.HandlerFunc {
 			http.Error(w, SanitizeError(err, "failed to complete task"), http.StatusBadRequest)
 			return
 		}
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventTaskCompleted,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"task_id": taskID,
+				"result":  req.Result,
+			},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{

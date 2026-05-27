@@ -54,6 +54,11 @@ func verifyProofChainRecursive(token string, maxDepth, depth int) error {
 				i, proofUCAN.Audience, ucan.Issuer, depth)
 		}
 
+		// Attenuation: child capabilities must be a subset of the proof's capabilities
+		if !CapabilitiesSubset(ucan.Caps, proofUCAN.Caps) {
+			return fmt.Errorf("proof[%d] attenuation violation at depth %d: child capabilities exceed parent", i, depth)
+		}
+
 		if err := verifyProofChainRecursive(proofToken, maxDepth, depth+1); err != nil {
 			return err
 		}
@@ -71,8 +76,9 @@ func decodeAnyUCAN(token string) (*UCAN, error) {
 	return DecodeUCAN(token)
 }
 
-// VerifySignedUCANWithChain verifies a UCAN signature, checks revocation, and validates proof chain.
-func VerifySignedUCANWithChain(token string, revocations *RevocationStore) (*UCAN, error) {
+// VerifySignedUCANWithChain verifies a UCAN signature, checks revocation,
+// validates proof chain, and optionally checks replay via NonceCache.
+func VerifySignedUCANWithChain(token string, revocations *RevocationStore, nonces *NonceCache) (*UCAN, error) {
 	ucan, payload, sig, err := splitUCAN(token)
 	if err != nil {
 		return nil, err
@@ -94,6 +100,11 @@ func VerifySignedUCANWithChain(token string, revocations *RevocationStore) (*UCA
 	// Check revocation
 	if revocations != nil && revocations.IsRevoked(ucan.Nonce) {
 		return nil, fmt.Errorf("UCAN has been revoked")
+	}
+
+	// Replay protection: reject if this nonce was already used
+	if nonces != nil && !nonces.Check(ucan.Nonce) {
+		return nil, fmt.Errorf("UCAN replay detected: nonce already used")
 	}
 
 	// Verify proof chain

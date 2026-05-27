@@ -3,10 +3,12 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 )
 
@@ -158,6 +160,125 @@ func DiffCommitAllParents(registry *storage.RepositoryRegistry) http.HandlerFunc
 			"commit":  commitHash,
 			"parents": parentDiffs,
 		})
+	}
+}
+
+// GetDiff returns a unified diff between two commits.
+func GetDiff(registry *storage.RepositoryRegistry) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoID := chi.URLParam(r, "id")
+		fromHash := r.URL.Query().Get("from")
+		toHash := r.URL.Query().Get("to")
+
+		if fromHash == "" || toHash == "" {
+			http.Error(w, "Both 'from' and 'to' parameters are required", http.StatusBadRequest)
+			return
+		}
+
+		repo, err := registry.Open(repoID)
+		if err != nil {
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
+			return
+		}
+
+		fromCommit, err := repo.GetCommit(plumbing.NewHash(fromHash))
+		if err != nil {
+			http.Error(w, "From commit not found", http.StatusNotFound)
+			return
+		}
+
+		toCommit, err := repo.GetCommit(plumbing.NewHash(toHash))
+		if err != nil {
+			http.Error(w, "To commit not found", http.StatusNotFound)
+			return
+		}
+
+		patch := computePatch(repo, fromCommit.TreeHash, toCommit.TreeHash)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"from":  fromHash,
+			"to":    toHash,
+			"patch": patch,
+		})
+	}
+}
+
+func computePatch(repo *storage.Repository, fromTree, toTree plumbing.Hash) string {
+	var patch strings.Builder
+	fromEntries := treeEntryMap(repo, fromTree)
+	toEntries := treeEntryMap(repo, toTree)
+
+	// Check all files in toTree
+	for name, toHash := range toEntries {
+		fromHash, existed := fromEntries[name]
+		if !existed {
+			// Added file
+			content := fileContent(repo, toHash)
+			patch.WriteString("--- /dev/null\n")
+			patch.WriteString("+++ b/" + name + "\n")
+			for _, line := range strings.Split(content, "\n") {
+				patch.WriteString("+" + line + "\n")
+			}
+			patch.WriteString("\n")
+		} else if fromHash != toHash {
+			// Modified file
+			oldContent := fileContent(repo, fromHash)
+			newContent := fileContent(repo, toHash)
+			patch.WriteString("--- a/" + name + "\n")
+			patch.WriteString("+++ b/" + name + "\n")
+			writeSimpleDiff(&patch, oldContent, newContent)
+			patch.WriteString("\n")
+		}
+	}
+
+	// Check deleted files
+	for name, fromHash := range fromEntries {
+		if _, exists := toEntries[name]; !exists {
+			content := fileContent(repo, fromHash)
+			patch.WriteString("--- a/" + name + "\n")
+			patch.WriteString("+++ /dev/null\n")
+			for _, line := range strings.Split(content, "\n") {
+				patch.WriteString("-" + line + "\n")
+			}
+			patch.WriteString("\n")
+		}
+	}
+
+	return patch.String()
+}
+
+func treeEntryMap(repo *storage.Repository, treeHash plumbing.Hash) map[string]plumbing.Hash {
+	entries, err := repo.ListTreeEntries(treeHash, "")
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]plumbing.Hash, len(entries))
+	for _, e := range entries {
+		if e.Mode == filemode.Regular || e.Mode == filemode.Executable {
+			m[e.Name] = e.Hash
+		}
+	}
+	return m
+}
+
+func fileContent(repo *storage.Repository, hash plumbing.Hash) string {
+	_, data, err := repo.GetObject(hash)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func writeSimpleDiff(w *strings.Builder, old, new string) {
+	oldLines := strings.Split(old, "\n")
+	newLines := strings.Split(new, "\n")
+	w.WriteString("@@ -1," + strconv.Itoa(len(oldLines)) + " +1," + strconv.Itoa(len(newLines)) + " @@\n")
+	for _, line := range oldLines {
+		w.WriteString("-" + line + "\n")
+	}
+	for _, line := range newLines {
+		w.WriteString("+" + line + "\n")
 	}
 }
 

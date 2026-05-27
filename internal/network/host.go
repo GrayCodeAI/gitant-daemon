@@ -13,6 +13,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+	ping "github.com/libp2p/go-libp2p/p2p/protocol/ping"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -122,6 +123,20 @@ func (h *Host) SetStreamHandler(id protocol.ID, handler func(p2pnetwork.Stream))
 // NewStream opens a stream to a peer for the given protocol.
 func (h *Host) NewStream(ctx context.Context, peerID peer.ID, id protocol.ID) (p2pnetwork.Stream, error) {
 	return h.host.NewStream(ctx, peerID, id)
+}
+
+// Ping sends a single ping to a peer and returns the RTT or an error.
+func (h *Host) Ping(ctx context.Context, peerID peer.ID) (time.Duration, error) {
+	result := <-ping.Ping(ctx, h.host, peerID)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RTT, nil
+}
+
+// Network returns the underlying libp2p network (for connection state checks).
+func (h *Host) Network() p2pnetwork.Network {
+	return h.host.Network()
 }
 
 // Close closes the host

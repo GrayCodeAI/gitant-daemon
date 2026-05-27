@@ -32,6 +32,12 @@ const (
 	EventPRMerged       EventType = "pr.merged"
 	EventPRReviewed     EventType = "pr.reviewed"
 	EventPush           EventType = "push"
+	EventLabelCreated   EventType = "label.created"
+	EventLabelDeleted   EventType = "label.deleted"
+	EventTaskCreated    EventType = "task.created"
+	EventTaskClaimed    EventType = "task.claimed"
+	EventTaskCompleted  EventType = "task.completed"
+	EventReleaseCreated EventType = "release.created"
 )
 
 // Event represents a webhook event

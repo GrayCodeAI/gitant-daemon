@@ -49,7 +49,7 @@ func CreateRelease(store *crdt.ReleaseStore, wm *webhooks.Manager) http.HandlerF
 
 		// Dispatch webhook
 		wm.Dispatch(webhooks.Event{
-			Type: "release.created",
+			Type: webhooks.EventReleaseCreated,
 			Repo: repoID,
 			Data: map[string]interface{}{
 				"release_id": release.ID,

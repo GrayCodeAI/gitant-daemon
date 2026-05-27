@@ -10,31 +10,33 @@ import (
 
 // issueSnapshot is the JSON-serializable representation of an Issue
 type issueSnapshot struct {
-	ID        string       `json:"id"`
-	Title     string       `json:"title"`
-	Body      string       `json:"body"`
-	Status    Status       `json:"status"`
-	Author    string       `json:"author"`
-	Labels    []string     `json:"labels"`
-	Assignee  string       `json:"assignee"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt time.Time    `json:"updated_at"`
-	Log       []*Operation `json:"log"`
+	ID         string       `json:"id"`
+	Title      string       `json:"title"`
+	Body       string       `json:"body"`
+	Status     Status       `json:"status"`
+	Author     string       `json:"author"`
+	Labels     []string     `json:"labels"`
+	Assignee   string       `json:"assignee"`
+	Tombstoned bool         `json:"tombstoned,omitempty"`
+	CreatedAt  time.Time    `json:"created_at"`
+	UpdatedAt  time.Time    `json:"updated_at"`
+	Log        []*Operation `json:"log"`
 }
 
 // MarshalJSON serializes an Issue including its operation log
 func (i *Issue) MarshalJSON() ([]byte, error) {
 	snap := issueSnapshot{
-		ID:        i.ID,
-		Title:     i.Title,
-		Body:      i.Body,
-		Status:    i.Status,
-		Author:    i.Author,
-		Labels:    i.Labels,
-		Assignee:  i.Assignee,
-		CreatedAt: i.CreatedAt,
-		UpdatedAt: i.UpdatedAt,
-		Log:       i.log.Operations(),
+		ID:         i.ID,
+		Title:      i.Title,
+		Body:       i.Body,
+		Status:     i.Status,
+		Author:     i.Author,
+		Labels:     i.Labels,
+		Assignee:   i.Assignee,
+		Tombstoned: i.Tombstoned,
+		CreatedAt:  i.CreatedAt,
+		UpdatedAt:  i.UpdatedAt,
+		Log:        i.log.Operations(),
 	}
 	return json.Marshal(snap)
 }
@@ -55,6 +57,7 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		i.Labels = make([]string, 0)
 	}
 	i.Assignee = snap.Assignee
+	i.Tombstoned = snap.Tombstoned
 	i.CreatedAt = snap.CreatedAt
 	i.UpdatedAt = snap.UpdatedAt
 	i.log = NewOperationLog()
@@ -66,16 +69,17 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 
 // Issue represents a CRDT issue
 type Issue struct {
-	ID        string
-	Title     string
-	Body      string
-	Status    Status
-	Author    string // DID
-	Labels    []string
-	Assignee  string // DID
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	log       *OperationLog
+	ID         string
+	Title      string
+	Body       string
+	Status     Status
+	Author     string // DID
+	Labels     []string
+	Assignee   string // DID
+	Tombstoned bool
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	log        *OperationLog
 }
 
 // NewIssue creates a new issue
@@ -223,6 +227,18 @@ func (i *Issue) SetAssignee(author, assignee string) {
 	})
 }
 
+// Tombstone marks this issue as deleted
+func (i *Issue) Tombstone(author string) {
+	i.Tombstoned = true
+	i.UpdatedAt = time.Now()
+
+	i.log.Add(&Operation{
+		ID:     generateID(),
+		Type:   OpTombstone,
+		Author: author,
+	})
+}
+
 // Log returns the operation log
 func (i *Issue) Log() *OperationLog {
 	return i.log
@@ -258,6 +274,7 @@ func (i *Issue) Merge(other *Issue) {
 
 	// Reset state and re-apply
 	i.Labels = make([]string, 0)
+	i.Tombstoned = false
 	i.applyOperations(allOps)
 }
 
@@ -303,6 +320,8 @@ func (i *Issue) applyOperations(ops []*Operation) {
 			if assignee, ok := op.Data["assignee"].(string); ok {
 				i.Assignee = assignee
 			}
+		case OpTombstone:
+			i.Tombstoned = true
 		}
 	}
 }

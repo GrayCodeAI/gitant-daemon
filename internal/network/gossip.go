@@ -2,11 +2,13 @@ package network
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"sync"
 
 	"github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/lakshmanpatel/gitant/internal/identity"
 )
 
 // GossipSub wraps the GossipSub protocol for pub/sub messaging
@@ -128,4 +130,39 @@ func (s *Subscription) Cancel() {
 type Message struct {
 	From peer.ID
 	Data []byte
+}
+
+// SignedEnvelope wraps a payload with a DID-based Ed25519 signature.
+type SignedEnvelope struct {
+	SourceDID string `json:"source_did"`
+	Signature []byte `json:"signature"`
+	Payload   []byte `json:"payload"`
+}
+
+// SignMessage signs a payload with the given identity and returns a SignedEnvelope.
+func SignMessage(id *identity.Identity, payload []byte) (*SignedEnvelope, error) {
+	if id == nil {
+		return nil, fmt.Errorf("identity is required for signing")
+	}
+	sig := id.Sign(payload)
+	return &SignedEnvelope{
+		SourceDID: id.DID,
+		Signature: sig,
+		Payload:   payload,
+	}, nil
+}
+
+// VerifyEnvelope verifies the signature on a SignedEnvelope and returns the payload if valid.
+func VerifyEnvelope(env *SignedEnvelope) ([]byte, error) {
+	if env == nil {
+		return nil, fmt.Errorf("nil envelope")
+	}
+	pubKey, err := identity.ExtractPublicKeyFromDID(env.SourceDID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid source DID: %w", err)
+	}
+	if !ed25519.Verify(pubKey, env.Payload, env.Signature) {
+		return nil, fmt.Errorf("invalid signature from %s", env.SourceDID)
+	}
+	return env.Payload, nil
 }

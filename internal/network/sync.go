@@ -18,6 +18,9 @@ const crdtGlobalTopic = "gitant/crdt"
 type CRDTStore interface {
 	MergeIssue(repoID string, issue *crdt.Issue) error
 	MergePR(repoID string, pr *crdt.PullRequest) error
+	MergeLabel(repoID string, label *crdt.Label) error
+	MergeTask(repoID string, task *crdt.Task) error
+	MergeRelease(repoID string, release *crdt.Release) error
 }
 
 // CRDTMessage replicates issue/PR operation logs across peers.
@@ -109,6 +112,57 @@ func (c *SyncCoordinator) PublishPR(repoID string, pr *crdt.PullRequest) error {
 	})
 }
 
+// PublishLabel broadcasts a label snapshot to peers.
+func (c *SyncCoordinator) PublishLabel(repoID string, label *crdt.Label) error {
+	if c == nil || c.node == nil || label == nil {
+		return nil
+	}
+	payload, err := json.Marshal(label)
+	if err != nil {
+		return err
+	}
+	return c.publishCRDT(CRDTMessage{
+		Repo:     repoID,
+		Entity:   "label",
+		EntityID: label.Name,
+		Payload:  payload,
+	})
+}
+
+// PublishTask broadcasts a task snapshot to peers.
+func (c *SyncCoordinator) PublishTask(repoID string, task *crdt.Task) error {
+	if c == nil || c.node == nil || task == nil {
+		return nil
+	}
+	payload, err := json.Marshal(task)
+	if err != nil {
+		return err
+	}
+	return c.publishCRDT(CRDTMessage{
+		Repo:     repoID,
+		Entity:   "task",
+		EntityID: task.ID,
+		Payload:  payload,
+	})
+}
+
+// PublishRelease broadcasts a release snapshot to peers.
+func (c *SyncCoordinator) PublishRelease(repoID string, release *crdt.Release) error {
+	if c == nil || c.node == nil || release == nil {
+		return nil
+	}
+	payload, err := json.Marshal(release)
+	if err != nil {
+		return err
+	}
+	return c.publishCRDT(CRDTMessage{
+		Repo:     repoID,
+		Entity:   "release",
+		EntityID: release.ID,
+		Payload:  payload,
+	})
+}
+
 // AnnouncePushObjects announces git object hashes in the DHT and optional pin store.
 func (c *SyncCoordinator) AnnouncePushObjects(ctx context.Context, repoID string, hashes []string) {
 	if c == nil || c.node == nil {
@@ -144,6 +198,16 @@ func (c *SyncCoordinator) publishCRDT(msg CRDTMessage) error {
 	if err != nil {
 		return err
 	}
+
+	if c.node.cfg.Identity != nil {
+		env, err := SignMessage(c.node.cfg.Identity, data)
+		if err != nil {
+			slog.Warn("failed to sign CRDT message", "error", err)
+		} else {
+			data, _ = json.Marshal(env)
+		}
+	}
+
 	if err := c.node.Gossip.Publish(crdtGlobalTopic, data); err != nil {
 		slog.Warn("CRDT global publish failed", "error", err)
 	}
@@ -169,8 +233,19 @@ func (c *SyncCoordinator) startCRDTSubscriber() error {
 				continue
 			}
 
+			payload := msg.Data
+			var env SignedEnvelope
+			if err := json.Unmarshal(msg.Data, &env); err == nil && env.SourceDID != "" && env.Signature != nil {
+				verified, err := VerifyEnvelope(&env)
+				if err != nil {
+					slog.Debug("invalid signed CRDT message, dropping", "error", err)
+					continue
+				}
+				payload = verified
+			}
+
 			var crdtMsg CRDTMessage
-			if err := json.Unmarshal(msg.Data, &crdtMsg); err != nil {
+			if err := json.Unmarshal(payload, &crdtMsg); err != nil {
 				continue
 			}
 			if crdtMsg.SourcePeer == c.node.Host.ID().String() {
@@ -210,6 +285,39 @@ func (c *SyncCoordinator) applyCRDT(msg CRDTMessage) {
 			return
 		}
 		slog.Info("merged remote PR", "repo", msg.Repo, "pr", msg.EntityID, "from", msg.SourcePeer)
+	case "label":
+		var label crdt.Label
+		if err := json.Unmarshal(msg.Payload, &label); err != nil {
+			slog.Warn("invalid remote label payload", "error", err)
+			return
+		}
+		if err := c.crdt.MergeLabel(msg.Repo, &label); err != nil {
+			slog.Warn("failed to merge remote label", "repo", msg.Repo, "label", msg.EntityID, "error", err)
+			return
+		}
+		slog.Info("merged remote label", "repo", msg.Repo, "label", msg.EntityID, "from", msg.SourcePeer)
+	case "task":
+		var task crdt.Task
+		if err := json.Unmarshal(msg.Payload, &task); err != nil {
+			slog.Warn("invalid remote task payload", "error", err)
+			return
+		}
+		if err := c.crdt.MergeTask(msg.Repo, &task); err != nil {
+			slog.Warn("failed to merge remote task", "repo", msg.Repo, "task", msg.EntityID, "error", err)
+			return
+		}
+		slog.Info("merged remote task", "repo", msg.Repo, "task", msg.EntityID, "from", msg.SourcePeer)
+	case "release":
+		var release crdt.Release
+		if err := json.Unmarshal(msg.Payload, &release); err != nil {
+			slog.Warn("invalid remote release payload", "error", err)
+			return
+		}
+		if err := c.crdt.MergeRelease(msg.Repo, &release); err != nil {
+			slog.Warn("failed to merge remote release", "repo", msg.Repo, "release", msg.EntityID, "error", err)
+			return
+		}
+		slog.Info("merged remote release", "repo", msg.Repo, "release", msg.EntityID, "from", msg.SourcePeer)
 	}
 }
 

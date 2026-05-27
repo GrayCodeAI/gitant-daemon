@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -65,6 +66,7 @@ type Server struct {
 	releases    *crdt.ReleaseStore
 	protection  *storage.ProtectionStore
 	revocations *identity.RevocationStore
+	nonces      *identity.NonceCache
 	rateLimiter *authMiddleware.RateLimiter
 	corsOrigins []string
 	startTime   time.Time
@@ -75,6 +77,7 @@ type Server struct {
 	reviewStore store.ReviewCommentStore
 	runner      *runner.Runner
 	wsHub       *ws.Hub
+	dataDir     string
 }
 
 func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string, corsOrigins []string) *Server {
@@ -93,11 +96,13 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 		releases:    releases,
 		protection:  protection,
 		revocations: revocations,
+		nonces:      identity.NewNonceCache(0), // default 10min TTL
 		rateLimiter: authMiddleware.NewRateLimiter(100), // 100 req/min
 		corsOrigins: corsOrigins,
 		startTime:   time.Now(),
 		runner:      runner.NewRunner(dataDir),
 		wsHub:       ws.NewHubWithOrigins(corsOrigins),
+		dataDir:     dataDir,
 	}
 
 	s.setupMiddleware()
@@ -125,10 +130,17 @@ func (s *Server) SetNetwork(node *network.Node, pinner network.ObjectPinner) {
 	s.sync = network.NewSyncCoordinator(
 		node,
 		newRepoObjectStore(s.repos),
-		newCRDTSyncStore(s.issues, s.prs),
+		newCRDTSyncStore(s.issues, s.prs, s.labels, s.tasks, s.releases),
 		newAgentTrustStore(s.agents),
 		pinner,
 	)
+
+	// Broadcast remote P2P events to WebSocket clients
+	node.SetFederatedEventHandler(func(ev network.FederatedEvent) {
+		if s.wsHub != nil {
+			s.wsHub.BroadcastFederated(ev.Type, ev.Repo, ev.Data)
+		}
+	})
 
 	if s.webhooks == nil {
 		return
@@ -145,6 +157,11 @@ func (s *Server) SetNetwork(node *network.Node, pinner network.ObjectPinner) {
 		}
 		if err := node.PublishRepoEvent(event.Repo, fedEvent); err != nil {
 			slog.Warn("failed to publish federated event", "type", event.Type, "repo", event.Repo, "error", err)
+		}
+
+		// Broadcast to WebSocket clients
+		if s.wsHub != nil {
+			s.wsHub.BroadcastFederated(string(event.Type), event.Repo, event.Data)
 		}
 
 		switch event.Type {
@@ -177,6 +194,36 @@ func (s *Server) SetNetwork(node *network.Node, pinner network.ObjectPinner) {
 			}
 			if err := s.sync.PublishPR(event.Repo, pr); err != nil {
 				slog.Warn("failed to publish PR CRDT", "repo", event.Repo, "pr", prID, "error", err)
+			}
+		case webhooks.EventLabelCreated, webhooks.EventLabelDeleted:
+			labelName, _ := event.Data["label"].(string)
+			if labelName == "" {
+				return
+			}
+			if label, err := s.labels.Get(event.Repo, labelName); err == nil {
+				if err := s.sync.PublishLabel(event.Repo, label); err != nil {
+					slog.Warn("failed to publish label CRDT", "repo", event.Repo, "label", labelName, "error", err)
+				}
+			}
+		case webhooks.EventTaskCreated, webhooks.EventTaskClaimed, webhooks.EventTaskCompleted:
+			taskID, _ := event.Data["task_id"].(string)
+			if taskID == "" {
+				return
+			}
+			if task, err := s.tasks.Get(event.Repo, taskID); err == nil {
+				if err := s.sync.PublishTask(event.Repo, task); err != nil {
+					slog.Warn("failed to publish task CRDT", "repo", event.Repo, "task", taskID, "error", err)
+				}
+			}
+		case webhooks.EventReleaseCreated:
+			releaseID, _ := event.Data["release_id"].(string)
+			if releaseID == "" {
+				return
+			}
+			if release, err := s.releases.Get(event.Repo, releaseID); err == nil {
+				if err := s.sync.PublishRelease(event.Repo, release); err != nil {
+					slog.Warn("failed to publish release CRDT", "repo", event.Repo, "release", releaseID, "error", err)
+				}
 			}
 		}
 	})
@@ -251,7 +298,7 @@ func (s *Server) setupMiddleware() {
 		MaxAge:           300,
 	}))
 	s.router.Use(authMiddleware.SecurityHeaders)
-	s.router.Use(authMiddleware.NewHTTPSignatureMiddleware(s.revocations, s.identity.DID))
+	s.router.Use(authMiddleware.NewHTTPSignatureMiddleware(s.revocations, s.nonces, s.identity.DID))
 	s.router.Use(s.recordAgentActivity)
 	s.router.Use(s.rateLimiter.Middleware)
 }
@@ -268,9 +315,23 @@ func (s *Server) recordAgentActivity(next http.Handler) http.Handler {
 func (s *Server) setupRoutes() {
 	// Health, status, metrics, and API docs (public)
 	s.router.Get("/health", s.handleHealth)
+	s.router.Get("/.well-known/did.json", s.handleDIDDocument)
 	s.router.Get("/api/v1/status", s.handleStatus)
 	s.router.Get("/api/v1/network/peers", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handlers.NetworkStatus(s.network)(w, r)
+	}))
+	s.router.Get("/api/v1/network/events", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.network == nil {
+			http.Error(w, "P2P not enabled", http.StatusServiceUnavailable)
+			return
+		}
+		limit := 50
+		if l := r.URL.Query().Get("limit"); l != "" {
+			fmt.Sscanf(l, "%d", &limit)
+		}
+		events := s.network.RemoteEvents(limit)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"events": events})
 	}))
 	s.router.Get("/api/v1/network/bootstrap", handlers.BootstrapPeers())
 	s.router.Get("/api/v1/federation/discover", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -303,6 +364,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/{id}/search", handlers.SearchCode(s.repos))
 			r.Get("/{id}/commits", handlers.GetCommitLog(s.repos))
 			r.Get("/{id}/diff", handlers.DiffCommits(s.repos))
+			r.Get("/{id}/diff/patch", handlers.GetDiff(s.repos))
 			r.Get("/{id}/commits/{hash}/parents", handlers.DiffCommitAllParents(s.repos))
 			r.Get("/{id}/labels", handlers.ListLabels(s.labels))
 			r.Get("/{id}/protections", handlers.ListProtections(s.protection))
@@ -338,13 +400,13 @@ func (s *Server) setupRoutes() {
 			r.Post("/{id}/prs/{prId}/review", handlers.ReviewPR(s.prs, s.webhooks))
 			r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs, s.repos, s.protection, s.webhooks))
 			r.Post("/{id}/branches", handlers.CreateBranch(s.repos))
-			r.Post("/{id}/labels", handlers.CreateLabel(s.labels))
-			r.Delete("/{id}/labels/{name}", handlers.DeleteLabel(s.labels))
+			r.Post("/{id}/labels", handlers.CreateLabel(s.labels, s.webhooks))
+			r.Delete("/{id}/labels/{name}", handlers.DeleteLabel(s.labels, s.webhooks))
 			r.Put("/{id}/protections/{branch}", handlers.SetProtection(s.protection))
 			r.Delete("/{id}/protections/{branch}", handlers.RemoveProtection(s.protection))
-			r.Post("/{id}/tasks", handlers.CreateTask(s.tasks))
-			r.Post("/{id}/tasks/{taskId}/claim", handlers.ClaimTask(s.tasks))
-			r.Post("/{id}/tasks/{taskId}/complete", handlers.CompleteTask(s.tasks))
+			r.Post("/{id}/tasks", handlers.CreateTask(s.tasks, s.webhooks))
+			r.Post("/{id}/tasks/{taskId}/claim", handlers.ClaimTask(s.tasks, s.webhooks))
+			r.Post("/{id}/tasks/{taskId}/complete", handlers.CompleteTask(s.tasks, s.webhooks))
 			r.Post("/{id}/releases", handlers.CreateRelease(s.releases, s.webhooks))
 			r.Delete("/{id}/releases/{releaseId}", handlers.DeleteRelease(s.releases, s.webhooks))
 		})
@@ -474,20 +536,50 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	checks := map[string]string{
 		"identity": "ok",
 		"storage":  "ok",
+		"p2p":      "ok",
 	}
 	status := "healthy"
 	code := http.StatusOK
 
+	// Critical: identity must be present
 	if s.identity == nil {
 		checks["identity"] = "missing"
-		status = "degraded"
+		status = "unhealthy"
 		code = http.StatusServiceUnavailable
 	}
 
+	// Critical: storage must be present
 	if s.repos == nil {
 		checks["storage"] = "missing"
-		status = "degraded"
+		status = "unhealthy"
 		code = http.StatusServiceUnavailable
+	}
+
+	// Non-critical: P2P connectivity
+	if s.network != nil {
+		peers := s.network.Host.Network().Peers()
+		checks["p2p"] = fmt.Sprintf("%d peers", len(peers))
+		if len(peers) == 0 {
+			checks["p2p"] = "no peers (degraded)"
+			if status == "healthy" {
+				status = "degraded"
+			}
+		}
+	} else {
+		checks["p2p"] = "disabled"
+	}
+
+	// Non-critical: disk space check on data directory
+	if s.dataDir != "" {
+		if usage, err := getDiskUsage(s.dataDir); err == nil {
+			checks["disk"] = fmt.Sprintf("%.1f%% used", usage)
+			if usage > 95 {
+				checks["disk"] = fmt.Sprintf("%.1f%% used (critical)", usage)
+				if status == "healthy" {
+					status = "degraded"
+				}
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -496,6 +588,31 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status": status,
 		"checks": checks,
 	})
+}
+
+// getDiskUsage returns the percentage of disk space used for the given path.
+func getDiskUsage(path string) (float64, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0, err
+	}
+	total := stat.Blocks * uint64(stat.Bsize)
+	free := stat.Bavail * uint64(stat.Bsize)
+	if total == 0 {
+		return 0, nil
+	}
+	used := total - free
+	return float64(used) / float64(total) * 100, nil
+}
+
+func (s *Server) handleDIDDocument(w http.ResponseWriter, r *http.Request) {
+	if s.identity == nil {
+		http.Error(w, "identity not configured", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(s.identity.DIDDocument())
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

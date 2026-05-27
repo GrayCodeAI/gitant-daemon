@@ -20,8 +20,8 @@ const (
 	UCANKey      contextKey = "ucan"
 )
 
-// NewHTTPSignatureMiddleware creates auth middleware with revocation and audience checking.
-func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, serverDID string) func(http.Handler) http.Handler {
+// NewHTTPSignatureMiddleware creates auth middleware with revocation, replay protection, and audience checking.
+func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, nonces *identity.NonceCache, serverDID string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			auth := r.Header.Get("Authorization")
@@ -33,7 +33,7 @@ func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, serverDID
 			// Handle UCAN Bearer tokens
 			if strings.HasPrefix(auth, "Bearer ") {
 				token := strings.TrimPrefix(auth, "Bearer ")
-				ucan, err := identity.VerifySignedUCANWithChain(token, revocations)
+				ucan, err := identity.VerifySignedUCANWithChain(token, revocations, nonces)
 				if err != nil {
 					http.Error(w, "Invalid or expired authentication token", http.StatusUnauthorized)
 					return

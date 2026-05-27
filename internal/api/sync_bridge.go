@@ -51,12 +51,15 @@ func (s *repoObjectStore) PutObject(repoID, hash, objType string, data []byte) e
 }
 
 type crdtSyncStore struct {
-	issues *crdt.IssueStore
-	prs    *crdt.PullRequestStore
+	issues   *crdt.IssueStore
+	prs      *crdt.PullRequestStore
+	labels   *crdt.LabelStore
+	tasks    *crdt.TaskStore
+	releases *crdt.ReleaseStore
 }
 
-func newCRDTSyncStore(issues *crdt.IssueStore, prs *crdt.PullRequestStore) network.CRDTStore {
-	return &crdtSyncStore{issues: issues, prs: prs}
+func newCRDTSyncStore(issues *crdt.IssueStore, prs *crdt.PullRequestStore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore) network.CRDTStore {
+	return &crdtSyncStore{issues: issues, prs: prs, labels: labels, tasks: tasks, releases: releases}
 }
 
 type agentTrustStore struct {
@@ -77,6 +80,27 @@ func (s *crdtSyncStore) MergeIssue(repoID string, issue *crdt.Issue) error {
 
 func (s *crdtSyncStore) MergePR(repoID string, pr *crdt.PullRequest) error {
 	return s.prs.MergeRemote(repoID, pr)
+}
+
+func (s *crdtSyncStore) MergeLabel(repoID string, label *crdt.Label) error {
+	if s.labels == nil {
+		return nil
+	}
+	return s.labels.MergeRemote(repoID, label)
+}
+
+func (s *crdtSyncStore) MergeTask(repoID string, task *crdt.Task) error {
+	if s.tasks == nil {
+		return nil
+	}
+	return s.tasks.MergeRemote(repoID, task)
+}
+
+func (s *crdtSyncStore) MergeRelease(repoID string, release *crdt.Release) error {
+	if s.releases == nil {
+		return nil
+	}
+	return s.releases.MergeRemote(repoID, release)
 }
 
 func objectTypeToString(objType plumbing.ObjectType) string {

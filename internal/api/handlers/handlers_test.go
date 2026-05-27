@@ -952,9 +952,14 @@ func setupTestLabelStore(t *testing.T) *crdt.LabelStore {
 	return crdt.NewLabelStore("")
 }
 
+func testWebhookManager() *webhooks.Manager {
+	return webhooks.NewManager()
+}
+
 func TestCreateLabel(t *testing.T) {
 	store := setupTestLabelStore(t)
-	handler := CreateLabel(store)
+	wm := testWebhookManager()
+	handler := CreateLabel(store, wm)
 
 	body := `{"name":"bug","color":"#ef4444"}`
 	req := httptest.NewRequest("POST", "/repo/labels", bytes.NewBufferString(body))
@@ -972,8 +977,8 @@ func TestCreateLabel(t *testing.T) {
 
 func TestListLabels(t *testing.T) {
 	store := setupTestLabelStore(t)
-	store.Add("repo", "bug", "#ef4444")
-	store.Add("repo", "feature", "#10b981")
+	store.Add("repo", "bug", "#ef4444", "test")
+	store.Add("repo", "feature", "#10b981", "test")
 
 	r := chiRouter()
 	r.Get("/{id}/labels", ListLabels(store))
@@ -995,10 +1000,11 @@ func TestListLabels(t *testing.T) {
 
 func TestDeleteLabel(t *testing.T) {
 	store := setupTestLabelStore(t)
-	store.Add("repo", "bug", "#ef4444")
+	wm := testWebhookManager()
+	store.Add("repo", "bug", "#ef4444", "test")
 
 	r := chiRouter()
-	r.Delete("/{id}/labels/{name}", DeleteLabel(store))
+	r.Delete("/{id}/labels/{name}", DeleteLabel(store, wm))
 
 	req := httptest.NewRequest("DELETE", "/repo/labels/bug", nil)
 	w := httptest.NewRecorder()
@@ -1018,7 +1024,8 @@ func setupTestTaskStore(t *testing.T) *crdt.TaskStore {
 
 func TestCreateTask(t *testing.T) {
 	store := setupTestTaskStore(t)
-	handler := CreateTask(store)
+	wm := testWebhookManager()
+	handler := CreateTask(store, wm)
 
 	body := `{"title":"Fix bug","description":"Fix the parser bug"}`
 	req := httptest.NewRequest("POST", "/repo/tasks", bytes.NewBufferString(body))
@@ -1039,8 +1046,9 @@ func TestClaimTask(t *testing.T) {
 	task := store.Create("repo", "task-1", "alice", "Fix bug", "")
 	_ = store.Save()
 
+	wm := testWebhookManager()
 	r := chiRouter()
-	r.Post("/{id}/tasks/{taskId}/claim", ClaimTask(store))
+	r.Post("/{id}/tasks/{taskId}/claim", ClaimTask(store, wm))
 
 	req := httptest.NewRequest("POST", "/repo/tasks/task-1/claim", nil)
 	w := httptest.NewRecorder()
@@ -1064,8 +1072,9 @@ func TestCompleteTask(t *testing.T) {
 	store.Create("repo", "task-1", "alice", "Fix bug", "")
 	store.Claim("repo", "task-1", "bob")
 
+	wm := testWebhookManager()
 	r := chiRouter()
-	r.Post("/{id}/tasks/{taskId}/complete", CompleteTask(store))
+	r.Post("/{id}/tasks/{taskId}/complete", CompleteTask(store, wm))
 
 	body := `{"result":"Fixed in commit abc123"}`
 	req := httptest.NewRequest("POST", "/repo/tasks/task-1/complete", bytes.NewBufferString(body))

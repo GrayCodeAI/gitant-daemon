@@ -5,7 +5,9 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
+	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
 // ListLabels lists all labels for a repository
@@ -28,7 +30,7 @@ func ListLabels(store *crdt.LabelStore) http.HandlerFunc {
 }
 
 // CreateLabel creates a new label for a repository
-func CreateLabel(store *crdt.LabelStore) http.HandlerFunc {
+func CreateLabel(store *crdt.LabelStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 
@@ -47,10 +49,24 @@ func CreateLabel(store *crdt.LabelStore) http.HandlerFunc {
 			return
 		}
 
-		if err := store.Add(repoID, req.Name, req.Color); err != nil {
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
+		}
+
+		if err := store.Add(repoID, req.Name, req.Color, author); err != nil {
 			http.Error(w, SanitizeError(err, "failed to create label"), http.StatusConflict)
 			return
 		}
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventLabelCreated,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"label":  req.Name,
+				"author": author,
+			},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -62,15 +78,29 @@ func CreateLabel(store *crdt.LabelStore) http.HandlerFunc {
 }
 
 // DeleteLabel deletes a label from a repository
-func DeleteLabel(store *crdt.LabelStore) http.HandlerFunc {
+func DeleteLabel(store *crdt.LabelStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoID := chi.URLParam(r, "id")
 		name := chi.URLParam(r, "name")
 
-		if err := store.Remove(repoID, name); err != nil {
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
+		}
+
+		if err := store.Remove(repoID, name, author); err != nil {
 			http.Error(w, SanitizeError(err, "label not found"), http.StatusNotFound)
 			return
 		}
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventLabelDeleted,
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"label":  name,
+				"author": author,
+			},
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{

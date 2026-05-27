@@ -107,7 +107,7 @@ func TestRequireCapability_WithNonMatchingUCAN(t *testing.T) {
 
 func TestNewHTTPSignatureMiddleware_NoAuth(t *testing.T) {
 	revocations := identity.NewRevocationStore("")
-	middleware := NewHTTPSignatureMiddleware(revocations, "did:key:zserver")
+	middleware := NewHTTPSignatureMiddleware(revocations, nil, "did:key:zserver")
 
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		did := GetIdentity(r)
@@ -135,7 +135,7 @@ func TestNewHTTPSignatureMiddleware_ValidUCAN(t *testing.T) {
 	revocations := identity.NewRevocationStore("")
 	serverDID := "did:key:zserver"
 
-	middleware := NewHTTPSignatureMiddleware(revocations, serverDID)
+	middleware := NewHTTPSignatureMiddleware(revocations, nil, serverDID)
 
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		did := GetIdentity(r)
@@ -177,7 +177,7 @@ func TestNewHTTPSignatureMiddleware_WrongAudience(t *testing.T) {
 	revocations := identity.NewRevocationStore("")
 	serverDID := "did:key:zserver"
 
-	middleware := NewHTTPSignatureMiddleware(revocations, serverDID)
+	middleware := NewHTTPSignatureMiddleware(revocations, nil, serverDID)
 
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -211,7 +211,7 @@ func TestNewHTTPSignatureMiddleware_WildcardAudience(t *testing.T) {
 	revocations := identity.NewRevocationStore("")
 	serverDID := "did:key:zserver"
 
-	middleware := NewHTTPSignatureMiddleware(revocations, serverDID)
+	middleware := NewHTTPSignatureMiddleware(revocations, nil, serverDID)
 
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -245,7 +245,7 @@ func TestNewHTTPSignatureMiddleware_RevokedUCAN(t *testing.T) {
 	revocations := identity.NewRevocationStore("")
 	serverDID := "did:key:zserver"
 
-	middleware := NewHTTPSignatureMiddleware(revocations, serverDID)
+	middleware := NewHTTPSignatureMiddleware(revocations, nil, serverDID)
 
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -282,7 +282,7 @@ func TestNewHTTPSignatureMiddleware_ExpiredUCAN(t *testing.T) {
 	revocations := identity.NewRevocationStore("")
 	serverDID := "did:key:zserver"
 
-	middleware := NewHTTPSignatureMiddleware(revocations, serverDID)
+	middleware := NewHTTPSignatureMiddleware(revocations, nil, serverDID)
 
 	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

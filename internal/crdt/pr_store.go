@@ -77,7 +77,7 @@ func (s *PullRequestStore) Get(repoID, prID string) (*PullRequest, error) {
 	}
 
 	pr, ok := repo[prID]
-	if !ok {
+	if !ok || pr.Tombstoned {
 		return nil, fmt.Errorf("pull request not found: %s", prID)
 	}
 
@@ -85,7 +85,7 @@ func (s *PullRequestStore) Get(repoID, prID string) (*PullRequest, error) {
 	return &copy, nil
 }
 
-// List returns all pull requests in a repository
+// List returns all non-tombstoned pull requests in a repository
 func (s *PullRequestStore) List(repoID string) []*PullRequest {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -97,13 +97,16 @@ func (s *PullRequestStore) List(repoID string) []*PullRequest {
 
 	result := make([]*PullRequest, 0, len(repo))
 	for _, pr := range repo {
+		if pr.Tombstoned {
+			continue
+		}
 		copy := *pr
 		result = append(result, &copy)
 	}
 	return result
 }
 
-// Delete removes a pull request
+// Delete tombstones a pull request
 func (s *PullRequestStore) Delete(repoID, prID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,11 +116,12 @@ func (s *PullRequestStore) Delete(repoID, prID string) error {
 		return fmt.Errorf("repository not found: %s", repoID)
 	}
 
-	if _, ok := repo[prID]; !ok {
+	pr, ok := repo[prID]
+	if !ok {
 		return fmt.Errorf("pull request not found: %s", prID)
 	}
 
-	delete(repo, prID)
+	pr.Tombstone("system")
 	return s.saveLocked()
 }
 

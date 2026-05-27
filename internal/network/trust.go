@@ -41,6 +41,16 @@ func (c *SyncCoordinator) PublishAttestation(targetDID string, score float64, re
 	if err != nil {
 		return err
 	}
+
+	if c.node.cfg.Identity != nil {
+		env, err := SignMessage(c.node.cfg.Identity, data)
+		if err != nil {
+			slog.Warn("failed to sign attestation message", "error", err)
+		} else {
+			data, _ = json.Marshal(env)
+		}
+	}
+
 	return c.node.Gossip.Publish(attestationTopic, data)
 }
 
@@ -67,8 +77,19 @@ func (c *SyncCoordinator) startAttestationSubscriber() error {
 				continue
 			}
 
+			payload := msg.Data
+			var env SignedEnvelope
+			if err := json.Unmarshal(msg.Data, &env); err == nil && env.SourceDID != "" && env.Signature != nil {
+				verified, err := VerifyEnvelope(&env)
+				if err != nil {
+					slog.Debug("invalid signed attestation, dropping", "error", err)
+					continue
+				}
+				payload = verified
+			}
+
 			var att AttestationMessage
-			if err := json.Unmarshal(msg.Data, &att); err != nil {
+			if err := json.Unmarshal(payload, &att); err != nil {
 				continue
 			}
 			if att.SourcePeer == c.node.Host.ID().String() {

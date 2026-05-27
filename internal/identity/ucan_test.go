@@ -244,7 +244,7 @@ func TestVerifySignedUCANWithChainNoRevocation(t *testing.T) {
 	}
 
 	// Should pass with nil revocation store
-	result, err := VerifySignedUCANWithChain(token, nil)
+	result, err := VerifySignedUCANWithChain(token, nil, nil)
 	if err != nil {
 		t.Fatalf("verification should pass: %v", err)
 	}
@@ -281,9 +281,141 @@ func TestVerifySignedUCANWithChainRevoked(t *testing.T) {
 	store.Revoke(ucan.Nonce)
 
 	// Should fail: UCAN is revoked
-	_, err = VerifySignedUCANWithChain(token, store)
+	_, err = VerifySignedUCANWithChain(token, store, nil)
 	if err == nil {
 		t.Fatal("expected revocation error")
+	}
+}
+
+func TestCapabilitiesSubset(t *testing.T) {
+	tests := []struct {
+		name   string
+		child  []Capability
+		parent []Capability
+		want   bool
+	}{
+		{
+			name:   "exact match",
+			child:  []Capability{{Resource: "repo:X", Actions: []string{"read"}}},
+			parent: []Capability{{Resource: "repo:X", Actions: []string{"read"}}},
+			want:   true,
+		},
+		{
+			name:   "child subset of parent actions",
+			child:  []Capability{{Resource: "repo:X", Actions: []string{"read"}}},
+			parent: []Capability{{Resource: "repo:X", Actions: []string{"read", "write"}}},
+			want:   true,
+		},
+		{
+			name:   "child has extra action",
+			child:  []Capability{{Resource: "repo:X", Actions: []string{"read", "delete"}}},
+			parent: []Capability{{Resource: "repo:X", Actions: []string{"read"}}},
+			want:   false,
+		},
+		{
+			name:   "parent wildcard resource",
+			child:  []Capability{{Resource: "repo:X", Actions: []string{"read"}}},
+			parent: []Capability{{Resource: "*", Actions: []string{"read"}}},
+			want:   true,
+		},
+		{
+			name:   "parent wildcard action",
+			child:  []Capability{{Resource: "repo:X", Actions: []string{"read", "write", "admin"}}},
+			parent: []Capability{{Resource: "repo:X", Actions: []string{"*"}}},
+			want:   true,
+		},
+		{
+			name:   "child has resource not in parent",
+			child:  []Capability{{Resource: "repo:Y", Actions: []string{"read"}}},
+			parent: []Capability{{Resource: "repo:X", Actions: []string{"read"}}},
+			want:   false,
+		},
+		{
+			name:   "empty child is always subset",
+			child:  []Capability{},
+			parent: []Capability{{Resource: "repo:X", Actions: []string{"read", "write"}}},
+			want:   true,
+		},
+		{
+			name:   "multiple child caps all covered",
+			child:  []Capability{{Resource: "repo:X", Actions: []string{"read"}}, {Resource: "repo:Y", Actions: []string{"write"}}},
+			parent: []Capability{{Resource: "*", Actions: []string{"read", "write"}}},
+			want:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CapabilitiesSubset(tt.child, tt.parent)
+			if got != tt.want {
+				t.Fatalf("CapabilitiesSubset() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProofChainAttenuationViolation(t *testing.T) {
+	root, _ := NewIdentity()
+	intermediate, _ := NewIdentity()
+	leaf, _ := NewIdentity()
+
+	// Root delegates only "read" to intermediate
+	rootUCAN := NewUCAN(root.DID, intermediate.DID, []Capability{
+		{Resource: "repo:test", Actions: []string{"read"}},
+	}, 1*time.Hour)
+	rootProof, err := rootUCAN.Sign(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Intermediate tries to escalate to "read"+"write" — attenuation violation
+	leafUCAN := &UCAN{
+		Issuer:    intermediate.DID,
+		Audience:  leaf.DID,
+		NotBefore: time.Now().Unix(),
+		Expires:   time.Now().Add(30 * time.Minute).Unix(),
+		Caps: []Capability{
+			{Resource: "repo:test", Actions: []string{"read", "write"}},
+		},
+		Proofs: []string{rootProof},
+		Nonce:  generateNonce(),
+	}
+	token, err := leafUCAN.Sign(intermediate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should fail: child caps exceed parent
+	if err := VerifyProofChain(token, 10); err == nil {
+		t.Fatal("expected attenuation violation error")
+	}
+}
+
+func TestNonceCacheReplayDetection(t *testing.T) {
+	issuer, _ := NewIdentity()
+	audience, _ := NewIdentity()
+
+	ucan := NewUCAN(issuer.DID, audience.DID, []Capability{
+		{Resource: "repo:test", Actions: []string{"read"}},
+	}, 1*time.Hour)
+	token, err := ucan.Sign(issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cache := NewNonceCache(5 * time.Second)
+	defer cache.Stop()
+
+	// First use should succeed
+	_, err = VerifySignedUCANWithChain(token, nil, cache)
+	if err != nil {
+		t.Fatalf("first verification should pass: %v", err)
+	}
+
+	// Replay should be rejected
+	_, err = VerifySignedUCANWithChain(token, nil, cache)
+	if err == nil {
+		t.Fatal("expected replay detection error")
 	}
 }
 
@@ -327,7 +459,7 @@ func TestVerifySignedUCANWithChainAndProofs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := VerifySignedUCANWithChain(token, nil)
+	result, err := VerifySignedUCANWithChain(token, nil, nil)
 	if err != nil {
 		t.Fatalf("verification should pass: %v", err)
 	}
