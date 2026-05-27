@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -588,21 +587,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status": status,
 		"checks": checks,
 	})
-}
-
-// getDiskUsage returns the percentage of disk space used for the given path.
-func getDiskUsage(path string) (float64, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0, err
-	}
-	total := stat.Blocks * uint64(stat.Bsize)
-	free := stat.Bavail * uint64(stat.Bsize)
-	if total == 0 {
-		return 0, nil
-	}
-	used := total - free
-	return float64(used) / float64(total) * 100, nil
 }
 
 func (s *Server) handleDIDDocument(w http.ResponseWriter, r *http.Request) {
