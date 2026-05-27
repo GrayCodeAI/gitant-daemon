@@ -100,7 +100,8 @@ api_post "http://127.0.0.1:9778/api/v1/repos" "$NODE2_UCAN" \
 sleep 2
 
 echo "==> Creating issue on node 1"
-api_post "http://127.0.0.1:9777/api/v1/repos/${REPO_ID}/issues" "$NODE1_UCAN" \
+ISSUE_UCAN="$(mint_ucan "$NODE1_DIR/identity.key" "$NODE1_DID" "repo:${REPO_ID}" "read,write")"
+api_post "http://127.0.0.1:9777/api/v1/repos/${REPO_ID}/issues" "$ISSUE_UCAN" \
   "{\"title\":\"${ISSUE_TITLE}\",\"body\":\"replicated by ci-multinode\"}" >/dev/null
 
 echo "==> Waiting for issue CRDT replication on node 2 (target <30s)"
