@@ -1,5 +1,5 @@
 # Used by GoReleaser — build context contains pre-built binaries only.
-FROM alpine:3.20
+FROM alpine:3.23
 RUN apk add --no-cache git ca-certificates wget && \
     adduser -D -u 1000 gitant
 COPY gitant /usr/local/bin/gitant
