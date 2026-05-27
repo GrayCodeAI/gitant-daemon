@@ -127,7 +127,17 @@ func (m *AuthManager) ValidateAPIKey(rawKey string) (*APIKey, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	keyHash := hashKey(rawKey)
+	// Strip gt_xxx_ prefix if present
+	keyToHash := rawKey
+	if len(rawKey) > 3 && rawKey[:3] == "gt_" {
+		// Extract the raw key part after the prefix
+		parts := rawKey[3:]
+		if idx := len(parts) - 64; idx > 0 {
+			keyToHash = parts[idx:]
+		}
+	}
+
+	keyHash := hashKey(keyToHash)
 
 	for _, key := range m.apiKeys {
 		if key.KeyHash == keyHash && key.Active {
