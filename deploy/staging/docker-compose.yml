@@ -1,0 +1,93 @@
+version: "3.8"
+
+services:
+  gitant-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "7777:7777"
+    environment:
+      - GITANT_PORT=7777
+      - GITANT_DATA_DIR=/data
+      - GITANT_NODE_URL=https://staging.node.gitant.io
+      - GITANT_LOG_LEVEL=info
+      - GITANT_LOG_FORMAT=json
+      - GITANT_CORS_ORIGINS=https://staging.gitant.io,http://localhost:3303
+      - GITANT_ENABLE_P2P=true
+      - GITANT_ENABLE_IPFS=true
+      - GITANT_DB_DRIVER=sqlite
+      - GITANT_DB_PATH=/data/gitant.db
+    volumes:
+      - gitant-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7777/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  gitant-web:
+    build:
+      context: ../gitant-web
+      dockerfile: Dockerfile
+    ports:
+      - "3303:3303"
+    environment:
+      - NEXT_PUBLIC_DAEMON_URL=https://staging.node.gitant.io
+      - NODE_ENV=production
+    depends_on:
+      - gitant-daemon
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3303"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana-dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana-datasources:/etc/grafana/provisioning/datasources
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+
+volumes:
+  gitant-data:
+  prometheus-data:
+  grafana-data:

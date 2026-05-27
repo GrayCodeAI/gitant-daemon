@@ -1,0 +1,199 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitant-daemon
+  namespace: gitant
+  labels:
+    app: gitant-daemon
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gitant-daemon
+  template:
+    metadata:
+      labels:
+        app: gitant-daemon
+    spec:
+      containers:
+        - name: gitant-daemon
+          image: ghcr.io/graycodeai/gitant-daemon:latest
+          ports:
+            - containerPort: 7777
+          env:
+            - name: GITANT_PORT
+              value: "7777"
+            - name: GITANT_DATA_DIR
+              value: "/data"
+            - name: GITANT_LOG_LEVEL
+              value: "info"
+            - name: GITANT_LOG_FORMAT
+              value: "json"
+            - name: GITANT_DB_DRIVER
+              value: "sqlite"
+            - name: GITANT_DB_PATH
+              value: "/data/gitant.db"
+          volumeMounts:
+            - name: gitant-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 7777
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 7777
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: gitant-data
+          persistentVolumeClaim:
+            claimName: gitant-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitant-daemon
+  namespace: gitant
+spec:
+  selector:
+    app: gitant-daemon
+  ports:
+    - port: 7777
+      targetPort: 7777
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitant-data
+  namespace: gitant
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitant-daemon
+  namespace: gitant
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - staging.node.gitant.io
+      secretName: gitant-daemon-tls
+  rules:
+    - host: staging.node.gitant.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gitant-daemon
+                port:
+                  number: 7777
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitant-web
+  namespace: gitant
+  labels:
+    app: gitant-web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gitant-web
+  template:
+    metadata:
+      labels:
+        app: gitant-web
+    spec:
+      containers:
+        - name: gitant-web
+          image: ghcr.io/graycodeai/gitant-web:latest
+          ports:
+            - containerPort: 3303
+          env:
+            - name: NEXT_PUBLIC_DAEMON_URL
+              value: "https://staging.node.gitant.io"
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3303
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3303
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitant-web
+  namespace: gitant
+spec:
+  selector:
+    app: gitant-web
+  ports:
+    - port: 3303
+      targetPort: 3303
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitant-web
+  namespace: gitant
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - staging.gitant.io
+      secretName: gitant-web-tls
+  rules:
+    - host: staging.gitant.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gitant-web
+                port:
+                  number: 3303
