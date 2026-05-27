@@ -43,7 +43,7 @@ func CreateRelease(store *crdt.ReleaseStore, wm *webhooks.Manager) http.HandlerF
 
 		release, err := store.Create(repoID, req.Tag, req.Title, req.Body, author)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
+			http.Error(w, SanitizeError(err, "failed to create release"), http.StatusConflict)
 			return
 		}
 
@@ -105,7 +105,7 @@ func GetRelease(store *crdt.ReleaseStore) http.HandlerFunc {
 
 		release, err := store.Get(repoID, releaseID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "release not found"), http.StatusNotFound)
 			return
 		}
 
@@ -121,7 +121,7 @@ func DeleteRelease(store *crdt.ReleaseStore, wm *webhooks.Manager) http.HandlerF
 		releaseID := chi.URLParam(r, "releaseId")
 
 		if err := store.Delete(repoID, releaseID); err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "release not found"), http.StatusNotFound)
 			return
 		}
 

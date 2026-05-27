@@ -51,7 +51,7 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 
 	project, err := h.store.Get(repoID, projectID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, SanitizeError(err, "project not found"), http.StatusNotFound)
 		return
 	}
 
@@ -85,7 +85,7 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.Create(project); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, SanitizeError(err, "failed to create project"), http.StatusInternalServerError)
 		return
 	}
 
@@ -129,7 +129,7 @@ func (h *ProjectHandler) AddCard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.AddCard(repoID, projectID, columnID, card); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, SanitizeError(err, "failed to add card"), http.StatusNotFound)
 		return
 	}
 
@@ -155,7 +155,7 @@ func (h *ProjectHandler) MoveCard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.MoveCard(repoID, projectID, cardID, req.TargetColumnID, req.TargetOrder); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, SanitizeError(err, "failed to move card"), http.StatusNotFound)
 		return
 	}
 
@@ -172,7 +172,7 @@ func (h *ProjectHandler) DeleteCard(w http.ResponseWriter, r *http.Request) {
 	cardID := chi.URLParam(r, "cardId")
 
 	if err := h.store.DeleteCard(repoID, projectID, cardID); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, SanitizeError(err, "failed to delete card"), http.StatusNotFound)
 		return
 	}
 
@@ -188,7 +188,7 @@ func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 
 	if err := h.store.Delete(repoID, projectID); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, SanitizeError(err, "project not found"), http.StatusNotFound)
 		return
 	}
 

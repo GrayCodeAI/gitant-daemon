@@ -2,14 +2,27 @@ package runner
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 )
+
+// maxScriptSize is the maximum allowed size of a workflow script in bytes.
+const maxScriptSize = 64 * 1024 // 64 KB
+
+// stepTimeout is the maximum time a single workflow step can run.
+const stepTimeout = 10 * time.Minute
+
+// dangerousPatterns matches shell constructs that can be used for command injection
+// or privilege escalation. These are blocked in workflow scripts.
+var dangerousPatterns = regexp.MustCompile(`(\$\(|` + "`" + `|eval\s|exec\s|source\s|\.\s|nc\s|ncat\s|curl\s.*\|\s*sh|wget\s.*\|\s*sh|python\s*-c|perl\s*-e|ruby\s*-e|node\s*-e|dd\s+if=|mkfs|fdisk|mount\s|umount\s|chmod\s+777|chown\s+root)`)
 
 // WorkflowStatus represents the status of a workflow run
 type WorkflowStatus string
@@ -56,6 +69,24 @@ type Run struct {
 	mu        sync.Mutex
 }
 
+// generateID creates a cryptographically random ID with the given prefix.
+func generateID(prefix string) string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(b))
+}
+
+// validateScript checks a workflow script for dangerous patterns.
+func validateScript(script string) error {
+	if len(script) > maxScriptSize {
+		return fmt.Errorf("script exceeds maximum size of %d bytes", maxScriptSize)
+	}
+	if dangerousPatterns.MatchString(script) {
+		return fmt.Errorf("script contains potentially dangerous commands")
+	}
+	return nil
+}
+
 // Runner manages workflow execution
 type Runner struct {
 	runsDir string
@@ -74,7 +105,7 @@ func NewRunner(dataDir string) *Runner {
 // Execute starts a workflow run
 func (r *Runner) Execute(ctx context.Context, repoPath string, workflow Workflow, commitSHA, branch string) (*Run, error) {
 	run := &Run{
-		ID:        fmt.Sprintf("run-%d", time.Now().UnixNano()),
+		ID:        generateID("run"),
 		CommitSHA: commitSHA,
 		Branch:    branch,
 		Status:    StatusPending,
@@ -155,18 +186,29 @@ func (r *Runner) executeWorkflow(ctx context.Context, repoPath string, workflow 
 }
 
 func (r *Runner) executeStep(ctx context.Context, repoPath, script string, run *Run) error {
-	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("step-%d.sh", time.Now().UnixNano()))
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/bash\nset -e\n"+script), 0755); err != nil {
+	if err := validateScript(script); err != nil {
+		return fmt.Errorf("script validation failed: %w", err)
+	}
+
+	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("step-%s.sh", generateID("step")))
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/bash\nset -e\n"+script), 0700); err != nil {
 		return fmt.Errorf("writing script: %w", err)
 	}
 	defer os.Remove(scriptPath)
 
-	cmd := exec.CommandContext(ctx, "bash", scriptPath)
+	stepCtx, cancel := context.WithTimeout(ctx, stepTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(stepCtx, "bash", scriptPath)
 	cmd.Dir = repoPath
-	cmd.Env = append(os.Environ(),
+	// Sanitize environment: only pass essential vars, strip sensitive ones
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"LANG=en_US.UTF-8",
 		"CI=true",
 		"GITANT=true",
-	)
+	}
 
 	output, err := cmd.CombinedOutput()
 	if len(output) > 0 {
@@ -174,6 +216,9 @@ func (r *Runner) executeStep(ctx context.Context, repoPath, script string, run *
 	}
 
 	if err != nil {
+		if stepCtx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("step timed out after %s", stepTimeout)
+		}
 		return fmt.Errorf("step failed: %w", err)
 	}
 

@@ -93,7 +93,7 @@ func SetProtection(store *storage.ProtectionStore) http.HandlerFunc {
 		}
 
 		if err := store.Set(repoID, protection); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, SanitizeError(err, "failed to set protection"), http.StatusInternalServerError)
 			return
 		}
 
@@ -115,7 +115,7 @@ func RemoveProtection(store *storage.ProtectionStore) http.HandlerFunc {
 		branch := chi.URLParam(r, "branch")
 
 		if err := store.Remove(repoID, branch); err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "protection not found"), http.StatusNotFound)
 			return
 		}
 

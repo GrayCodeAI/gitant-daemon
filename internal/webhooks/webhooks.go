@@ -100,6 +100,13 @@ func ValidateWebhookURL(rawURL string) error {
 	return nil
 }
 
+// isRawIP returns true if the hostname is a raw IP address (not a DNS name).
+// Delivery-time re-validation only needs to check hostnames (DNS rebinding);
+// raw IPs cannot be rebound.
+func isRawIP(hostname string) bool {
+	return net.ParseIP(hostname) != nil
+}
+
 // Register registers a new webhook and persists it.
 func (m *Manager) Register(id, url string, events []EventType, secret string) *Webhook {
 	m.mu.Lock()
@@ -175,6 +182,16 @@ func (m *Manager) matches(wh *Webhook, eventType EventType) bool {
 
 // send sends an event to a webhook endpoint
 func (m *Manager) send(wh *Webhook, event Event) {
+	// Re-validate hostname URLs at delivery time to prevent DNS rebinding attacks.
+	// Raw IPs (e.g. 127.0.0.1, 10.0.0.1) cannot be rebound, so skip re-validation.
+	u, _ := url.Parse(wh.URL)
+	if u != nil && !isRawIP(u.Hostname()) {
+		if err := ValidateWebhookURL(wh.URL); err != nil {
+			slog.Warn("webhook URL failed delivery-time validation, skipping", "url", wh.URL, "error", err)
+			return
+		}
+	}
+
 	body, err := json.Marshal(event)
 	if err != nil {
 		slog.Error("webhook marshal error", "error", err)

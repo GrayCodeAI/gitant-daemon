@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -53,7 +52,7 @@ func (h *ReviewHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	comment := &store.ReviewComment{
-		ID:         fmt.Sprintf("rc-%d", time.Now().UnixNano()),
+		ID:         generateID("rc"),
 		PRID:       prID,
 		FilePath:   req.FilePath,
 		LineNumber: req.LineNumber,
@@ -64,7 +63,7 @@ func (h *ReviewHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.comments.Create(r.Context(), comment); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to create comment", http.StatusInternalServerError)
 		return
 	}
 
@@ -89,7 +88,7 @@ func (h *ReviewHandler) ListComments(w http.ResponseWriter, r *http.Request) {
 
 	comments, err := h.comments.ListByPR(r.Context(), prID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to list comments", http.StatusInternalServerError)
 		return
 	}
 
@@ -120,7 +119,7 @@ func (h *ReviewHandler) ResolveComment(w http.ResponseWriter, r *http.Request) {
 	commentID := chi.URLParam(r, "commentId")
 
 	if err := h.comments.Resolve(r.Context(), commentID); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to resolve comment", http.StatusInternalServerError)
 		return
 	}
 
@@ -137,7 +136,7 @@ func (h *ReviewHandler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 	commentID := chi.URLParam(r, "commentId")
 
 	if err := h.comments.Delete(r.Context(), commentID); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to delete comment", http.StatusInternalServerError)
 		return
 	}
 

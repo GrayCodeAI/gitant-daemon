@@ -30,7 +30,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.auth.Register(r.Context(), input)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, SanitizeError(err, "registration failed"), http.StatusBadRequest)
 		return
 	}
 
@@ -140,7 +140,7 @@ func NewUserHandler(users store.UserStore) *UserHandler {
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := h.users.List(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to list users", http.StatusInternalServerError)
 		return
 	}
 

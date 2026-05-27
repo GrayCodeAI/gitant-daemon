@@ -58,7 +58,7 @@ func (h *DiscussionHandler) GetDiscussion(w http.ResponseWriter, r *http.Request
 
 	discussion, err := h.store.Get(repoID, discussionID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, SanitizeError(err, "discussion not found"), http.StatusNotFound)
 		return
 	}
 
@@ -102,7 +102,7 @@ func (h *DiscussionHandler) CreateDiscussion(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := h.store.Create(discussion); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, SanitizeError(err, "failed to create discussion"), http.StatusInternalServerError)
 		return
 	}
 
@@ -141,7 +141,7 @@ func (h *DiscussionHandler) AddAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.AddAnswer(repoID, discussionID, answer); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, SanitizeError(err, "discussion not found"), http.StatusNotFound)
 		return
 	}
 
@@ -157,7 +157,7 @@ func (h *DiscussionHandler) AcceptAnswer(w http.ResponseWriter, r *http.Request)
 	answerID := chi.URLParam(r, "answerId")
 
 	if err := h.store.AcceptAnswer(repoID, discussionID, answerID); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, SanitizeError(err, "answer not found"), http.StatusNotFound)
 		return
 	}
 
@@ -173,7 +173,7 @@ func (h *DiscussionHandler) UpvoteDiscussion(w http.ResponseWriter, r *http.Requ
 	discussionID := chi.URLParam(r, "discussionId")
 
 	if err := h.store.Upvote(repoID, discussionID); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, SanitizeError(err, "discussion not found"), http.StatusNotFound)
 		return
 	}
 
@@ -189,7 +189,7 @@ func (h *DiscussionHandler) DeleteDiscussion(w http.ResponseWriter, r *http.Requ
 	discussionID := chi.URLParam(r, "discussionId")
 
 	if err := h.store.Delete(repoID, discussionID); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, SanitizeError(err, "discussion not found"), http.StatusNotFound)
 		return
 	}
 

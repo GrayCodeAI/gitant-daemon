@@ -198,28 +198,6 @@ func GenerateOpenAPISpec(baseURL string) *OpenAPISpec {
 					},
 				},
 			},
-			"/api/v1/notifications": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "List notifications",
-					"description": "Returns notifications for the authenticated user",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "List of notifications",
-						},
-					},
-				},
-			},
-			"/api/v1/packages": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "List packages",
-					"description": "Returns a list of all packages",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "List of packages",
-						},
-					},
-				},
-			},
 			"/health": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Health check",

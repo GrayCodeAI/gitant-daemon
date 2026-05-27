@@ -20,7 +20,7 @@ func StarRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		}
 
 		if err := registry.Star(repoID, did); err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
@@ -44,7 +44,7 @@ func UnstarRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		}
 
 		if err := registry.Unstar(repoID, did); err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
@@ -64,7 +64,7 @@ func GetStarCount(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		entry, err := registry.GetEntry(repoID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 

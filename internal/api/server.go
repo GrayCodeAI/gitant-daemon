@@ -97,7 +97,7 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 		corsOrigins: corsOrigins,
 		startTime:   time.Now(),
 		runner:      runner.NewRunner(dataDir),
-		wsHub:       ws.NewHub(),
+		wsHub:       ws.NewHubWithOrigins(corsOrigins),
 	}
 
 	s.setupMiddleware()
@@ -238,7 +238,8 @@ func (s *Server) setupMiddleware() {
 			"http://localhost:3303",
 			"http://localhost:3456",
 			"http://localhost:3000",
-			"https://*.gitant.dev",
+			"https://gitant.dev",
+			"https://app.gitant.dev",
 		}
 	}
 	s.router.Use(cors.Handler(cors.Options{
@@ -439,8 +440,6 @@ func (s *Server) setupRoutes() {
 		importHandler := handlers.NewImportHandler(s.repos, s.issues, s.prs, s.webhooks)
 		r.Post("/api/v1/import", importHandler.Import)
 		r.Post("/api/v1/export", importHandler.Export)
-		r.Post("/api/v1/import/github", importHandler.GitHubImport)
-		r.Post("/api/v1/import/gitlab", importHandler.GitLabImport)
 	})
 
 	// Batch operations (authenticated)
@@ -453,39 +452,22 @@ func (s *Server) setupRoutes() {
 	// OpenAPI spec
 	s.router.Get("/api/v1/openapi.json", handlers.HandleOpenAPI)
 
-	// WebSocket endpoint
+	// WebSocket endpoint (requires authentication)
 	if s.authService != nil {
-		s.router.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
-			user := authMiddleware.GetUser(r)
-			userID := ""
-			if user != nil {
-				userID = user.ID
-			}
-			ws.HandleWebSocket(s.wsHub, userID)(w, r)
+		s.router.Group(func(r chi.Router) {
+			r.Use(authMiddleware.SessionAuthMiddleware(s.authService))
+			r.Use(authMiddleware.RequireSessionAuth)
+			r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
+				user := authMiddleware.GetUser(r)
+				userID := ""
+				if user != nil {
+					userID = user.ID
+				}
+				ws.HandleWebSocket(s.wsHub, userID)(w, r)
+			})
 		})
 	}
 
-	// Package endpoints
-	// (placeholder - requires package registry initialization)
-
-	// Wiki endpoints
-	// (placeholder - requires wiki initialization)
-
-	// Notification endpoints
-	// (placeholder - requires notification manager initialization)
-
-	// LFS endpoints
-	// (placeholder - requires LFS store initialization)
-
-	// Extended endpoints (packages, wiki, notifications, bounties, governance, etc.)
-	// These are wired when the extended handler is initialized
-}
-
-// SetExtendedHandler wires up the extended routes (packages, wiki, notifications, etc.)
-func (s *Server) SetExtendedHandler(h *handlers.ExtendedHandler) {
-	if h != nil {
-		h.RegisterRoutes(s.router)
-	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

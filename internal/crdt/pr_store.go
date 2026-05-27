@@ -38,8 +38,6 @@ func (s *PullRequestStore) Save() error {
 		return nil
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	// Deep copy to avoid race with concurrent mutations
 	data := make(map[string]map[string]*PullRequest, len(s.prs))
 	for repoID, repoPRs := range s.prs {
 		repoCopy := make(map[string]*PullRequest, len(repoPRs))
@@ -49,6 +47,7 @@ func (s *PullRequestStore) Save() error {
 		}
 		data[repoID] = repoCopy
 	}
+	s.mu.RUnlock()
 	return persistence.SaveJSON(s.path, data)
 }
 
@@ -63,7 +62,8 @@ func (s *PullRequestStore) Create(repoID, id, author, title, body, sourceBranch,
 
 	pr := NewPullRequest(id, author, title, body, sourceBranch, targetBranch)
 	s.prs[repoID][id] = pr
-	return pr
+	copy := *pr
+	return &copy
 }
 
 // Get returns a pull request by repo and PR ID
@@ -81,7 +81,8 @@ func (s *PullRequestStore) Get(repoID, prID string) (*PullRequest, error) {
 		return nil, fmt.Errorf("pull request not found: %s", prID)
 	}
 
-	return pr, nil
+	copy := *pr
+	return &copy, nil
 }
 
 // List returns all pull requests in a repository
@@ -96,7 +97,8 @@ func (s *PullRequestStore) List(repoID string) []*PullRequest {
 
 	result := make([]*PullRequest, 0, len(repo))
 	for _, pr := range repo {
-		result = append(result, pr)
+		copy := *pr
+		result = append(result, &copy)
 	}
 	return result
 }

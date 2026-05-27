@@ -2,9 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
+	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
@@ -75,9 +74,11 @@ func CreateTask(store *crdt.TaskStore) http.HandlerFunc {
 			author = "anonymous"
 		}
 
-		taskID := fmt.Sprintf("task-%d", time.Now().UnixNano())
+		taskID := generateID("task")
 		task := store.Create(repoID, taskID, author, req.Title, req.Description)
-		_ = store.Save()
+		if err := store.Save(); err != nil {
+			slog.Error("failed to persist task", "error", err)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -97,7 +98,7 @@ func ClaimTask(store *crdt.TaskStore) http.HandlerFunc {
 		}
 
 		if err := store.Claim(repoID, taskID, author); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, SanitizeError(err, "failed to claim task"), http.StatusBadRequest)
 			return
 		}
 
@@ -119,10 +120,12 @@ func CompleteTask(store *crdt.TaskStore) http.HandlerFunc {
 		var req struct {
 			Result string `json:"result"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		if r.Body != nil {
+			json.NewDecoder(r.Body).Decode(&req)
+		}
 
 		if err := store.Complete(repoID, taskID, req.Result); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, SanitizeError(err, "failed to complete task"), http.StatusBadRequest)
 			return
 		}
 

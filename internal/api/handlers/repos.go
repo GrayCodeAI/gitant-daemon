@@ -3,7 +3,7 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -228,7 +228,7 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 				objType = plumbing.TagObject
 			}
 			if err := repo.StoreObject(hash, objType, content); err != nil {
-				errors = append(errors, "storing "+obj.Hash+": "+err.Error())
+				errors = append(errors, "storing "+obj.Hash+": failed")
 			}
 		}
 
@@ -237,8 +237,8 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 			if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
 				hash := plumbing.NewHash(update.NewHash)
 				if err := repo.CreateBranch(update.Name, hash); err != nil {
-					log.Printf("warning: failed to create branch %s: %v", update.Name, err)
-					errors = append(errors, err.Error())
+					slog.Warn("failed to create branch", "branch", update.Name, "error", err)
+					errors = append(errors, "failed to update ref "+update.Name)
 				}
 			}
 		}
@@ -321,14 +321,14 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 
 			objects, err := storage.ExtractObjects(packData)
 			if err != nil {
-				http.Error(w, "Failed to parse packfile: "+err.Error(), http.StatusBadRequest)
+				http.Error(w, "Failed to parse packfile", http.StatusBadRequest)
 				return
 			}
 
 			for _, obj := range objects {
 				objectHashes = append(objectHashes, obj.Hash.String())
 				if err := repo.StoreObject(obj.Hash, obj.Type, obj.Content); err != nil {
-					log.Printf("warning: failed to store object %s: %v", obj.Hash, err)
+					slog.Warn("failed to store object", "hash", obj.Hash, "error", err)
 				}
 			}
 		}
@@ -339,8 +339,8 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 			if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
 				hash := plumbing.NewHash(update.NewHash)
 				if err := repo.CreateBranch(update.Name, hash); err != nil {
-					log.Printf("warning: failed to create branch %s: %v", update.Name, err)
-					errors = append(errors, err.Error())
+					slog.Warn("failed to create branch", "branch", update.Name, "error", err)
+					errors = append(errors, "failed to update ref "+update.Name)
 				}
 			}
 		}
@@ -540,6 +540,15 @@ func CreateBranch(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if req.Name == "" {
+			http.Error(w, "branch name is required", http.StatusBadRequest)
+			return
+		}
+		if !ValidateID(req.Name) {
+			http.Error(w, "invalid branch name", http.StatusBadRequest)
 			return
 		}
 

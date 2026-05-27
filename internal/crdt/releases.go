@@ -111,6 +111,25 @@ func (s *ReleaseStore) Save() error {
 	if s.path == "" {
 		return nil
 	}
+	s.mu.RLock()
+	data := make(map[string]map[string]*Release, len(s.releases))
+	for repoID, repoReleases := range s.releases {
+		repoCopy := make(map[string]*Release, len(repoReleases))
+		for k, v := range repoReleases {
+			copy := *v
+			repoCopy[k] = &copy
+		}
+		data[repoID] = repoCopy
+	}
+	s.mu.RUnlock()
+	return persistence.SaveJSON(s.path, data)
+}
+
+// saveLocked persists while the caller already holds the write lock.
+func (s *ReleaseStore) saveLocked() error {
+	if s.path == "" {
+		return nil
+	}
 	return persistence.SaveJSON(s.path, s.releases)
 }
 
@@ -167,7 +186,8 @@ func (s *ReleaseStore) Create(repoID, tag, title, body, author string) (*Release
 	release.log.Add(op)
 
 	s.releases[repoID][id] = release
-	return release, nil
+	copy := *release
+	return &copy, nil
 }
 
 // Get returns a specific release
@@ -179,7 +199,8 @@ func (s *ReleaseStore) Get(repoID, releaseID string) (*Release, error) {
 		return nil, fmt.Errorf("repo not found: %s", repoID)
 	}
 	if release, ok := s.releases[repoID][releaseID]; ok {
-		return release, nil
+		copy := *release
+		return &copy, nil
 	}
 	return nil, fmt.Errorf("release not found: %s", releaseID)
 }
@@ -195,7 +216,8 @@ func (s *ReleaseStore) List(repoID string) []*Release {
 	}
 
 	for _, release := range s.releases[repoID] {
-		result = append(result, release)
+		copy := *release
+		result = append(result, &copy)
 	}
 
 	// Sort by created_at descending (newest first)
@@ -219,5 +241,5 @@ func (s *ReleaseStore) Delete(repoID, releaseID string) error {
 	}
 
 	delete(s.releases[repoID], releaseID)
-	return nil
+	return s.saveLocked()
 }

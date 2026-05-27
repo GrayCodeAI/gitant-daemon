@@ -26,7 +26,7 @@ func RevokeUCAN(revocations *identity.RevocationStore) http.HandlerFunc {
 
 		revocations.Revoke(req.Nonce)
 		if err := revocations.Save(); err != nil {
-			http.Error(w, "failed to persist revocation: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "failed to persist revocation", http.StatusInternalServerError)
 			return
 		}
 

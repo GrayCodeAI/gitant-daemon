@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
@@ -34,16 +33,11 @@ func RegisterWebhook(manager *webhooks.Manager) http.HandlerFunc {
 			return
 		}
 
-		if err := webhooks.ValidateWebhookURL(req.URL); err != nil {
-			http.Error(w, fmt.Sprintf("Invalid webhook URL: %s", err), http.StatusBadRequest)
-			return
-		}
-
 		if len(req.Events) == 0 {
 			req.Events = []webhooks.EventType{"*"}
 		}
 
-		id := fmt.Sprintf("wh-%d", time.Now().UnixNano())
+		id := generateID("wh")
 		wh := manager.Register(id, req.URL, req.Events, req.Secret)
 
 		w.Header().Set("Content-Type", "application/json")

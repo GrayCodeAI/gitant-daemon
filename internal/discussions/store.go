@@ -1,12 +1,16 @@
 package discussions
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/lakshmanpatel/gitant/internal/persistence"
 )
 
 // Discussion represents a discussion thread
@@ -67,12 +71,25 @@ func (s *Store) Load() error {
 
 // Save saves discussions to disk
 func (s *Store) Save() error {
-	path := filepath.Join(s.baseDir, "discussions.json")
-	data, err := json.MarshalIndent(s.discussions, "", "  ")
-	if err != nil {
-		return err
+	s.mu.RLock()
+	data := make(map[string][]*Discussion, len(s.discussions))
+	for repoID, discs := range s.discussions {
+		discCopy := make([]*Discussion, len(discs))
+		for i, d := range discs {
+			dc := *d
+			discCopy[i] = &dc
+		}
+		data[repoID] = discCopy
 	}
-	return os.WriteFile(path, data, 0644)
+	s.mu.RUnlock()
+	path := filepath.Join(s.baseDir, "discussions.json")
+	return persistence.SaveJSON(path, data)
+}
+
+// saveLocked persists while the caller already holds the write lock.
+func (s *Store) saveLocked() error {
+	path := filepath.Join(s.baseDir, "discussions.json")
+	return persistence.SaveJSON(path, s.discussions)
 }
 
 // Create creates a new discussion
@@ -80,7 +97,7 @@ func (s *Store) Create(discussion *Discussion) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	discussion.ID = fmt.Sprintf("disc-%d", time.Now().UnixNano())
+	discussion.ID = generateDiscussionID("disc")
 	discussion.CreatedAt = time.Now()
 	discussion.UpdatedAt = time.Now()
 	if discussion.Status == "" {
@@ -94,7 +111,7 @@ func (s *Store) Create(discussion *Discussion) error {
 	}
 
 	s.discussions[discussion.RepoID] = append(s.discussions[discussion.RepoID], discussion)
-	return s.Save()
+	return s.saveLocked()
 }
 
 // Get gets a discussion by ID
@@ -145,7 +162,7 @@ func (s *Store) Update(repoID, discussionID string, fn func(*Discussion) error) 
 				return err
 			}
 			d.UpdatedAt = time.Now()
-			return s.Save()
+			return s.saveLocked()
 		}
 	}
 	return fmt.Errorf("discussion not found")
@@ -158,12 +175,12 @@ func (s *Store) AddAnswer(repoID, discussionID string, answer *Answer) error {
 
 	for _, d := range s.discussions[repoID] {
 		if d.ID == discussionID {
-			answer.ID = fmt.Sprintf("ans-%d", time.Now().UnixNano())
+			answer.ID = generateDiscussionID("ans")
 			answer.CreatedAt = time.Now()
 			answer.UpdatedAt = time.Now()
 			d.Answers = append(d.Answers, *answer)
 			d.UpdatedAt = time.Now()
-			return s.Save()
+			return s.saveLocked()
 		}
 	}
 	return fmt.Errorf("discussion not found")
@@ -181,7 +198,7 @@ func (s *Store) AcceptAnswer(repoID, discussionID, answerID string) error {
 					d.Answers[i].IsAccepted = true
 					d.Status = "answered"
 					d.UpdatedAt = time.Now()
-					return s.Save()
+					return s.saveLocked()
 				}
 			}
 			return fmt.Errorf("answer not found")
@@ -199,7 +216,7 @@ func (s *Store) Upvote(repoID, discussionID string) error {
 		if d.ID == discussionID {
 			d.Upvotes++
 			d.UpdatedAt = time.Now()
-			return s.Save()
+			return s.saveLocked()
 		}
 	}
 	return fmt.Errorf("discussion not found")
@@ -214,7 +231,7 @@ func (s *Store) Delete(repoID, discussionID string) error {
 	for i, d := range discussions {
 		if d.ID == discussionID {
 			s.discussions[repoID] = append(discussions[:i], discussions[i+1:]...)
-			return s.Save()
+			return s.saveLocked()
 		}
 	}
 	return fmt.Errorf("discussion not found")
@@ -259,4 +276,10 @@ func toLower(b byte) byte {
 		return b + 32
 	}
 	return b
+}
+
+func generateDiscussionID(prefix string) string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(b))
 }

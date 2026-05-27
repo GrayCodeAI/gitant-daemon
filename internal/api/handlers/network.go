@@ -42,7 +42,7 @@ func DiscoverFederation(node *network.Node) http.HandlerFunc {
 		records, err := node.DiscoverFederation(r.Context(), queryDID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-				"error": err.Error(),
+				"error": "federation discovery failed",
 			})
 			return
 		}

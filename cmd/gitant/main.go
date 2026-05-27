@@ -42,7 +42,9 @@ var serveCmd = &cobra.Command{
 		port, _ := cmd.Flags().GetInt("port")
 		if port == 7777 {
 			if envPort := os.Getenv("GITANT_PORT"); envPort != "" {
-				fmt.Sscanf(envPort, "%d", &port)
+				if _, err := fmt.Sscanf(envPort, "%d", &port); err != nil {
+					slog.Warn("invalid GITANT_PORT, using default", "value", envPort, "error", err)
+				}
 			}
 		}
 		dataDir, _ := cmd.Flags().GetString("data-dir")

@@ -19,7 +19,7 @@ func GetCommitLog(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		repo, err := registry.Open(repoID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
@@ -52,7 +52,7 @@ func GetCommitLog(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		// Walk enough commits for the requested page
 		commits, err := repo.WalkCommits(startHash, offset+limit)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, SanitizeError(err, "failed to walk commits"), http.StatusInternalServerError)
 			return
 		}
 
@@ -82,7 +82,7 @@ func DiffCommits(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		repo, err := registry.Open(repoID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
@@ -118,7 +118,7 @@ func DiffCommitAllParents(registry *storage.RepositoryRegistry) http.HandlerFunc
 
 		repo, err := registry.Open(repoID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 

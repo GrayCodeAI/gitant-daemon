@@ -7,9 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 )
+
+var validOID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 // Object represents an LFS object
 type Object struct {
@@ -42,6 +45,10 @@ func (s *Store) Init() error {
 
 // Upload uploads an LFS object
 func (s *Store) Upload(repoID, oid string, reader io.Reader) (*Object, error) {
+	if !validOID.MatchString(oid) {
+		return nil, fmt.Errorf("invalid OID: must be 64 lowercase hex characters")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -56,12 +63,12 @@ func (s *Store) Upload(repoID, oid string, reader io.Reader) (*Object, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating temp file: %w", err)
 	}
+	defer file.Close()
 
 	hasher := sha256.New()
 	writer := io.MultiWriter(file, hasher)
 
 	size, err := io.Copy(writer, reader)
-	file.Close()
 	if err != nil {
 		os.Remove(tmpPath)
 		return nil, fmt.Errorf("writing object: %w", err)
@@ -95,6 +102,10 @@ func (s *Store) Upload(repoID, oid string, reader io.Reader) (*Object, error) {
 
 // Download downloads an LFS object
 func (s *Store) Download(oid string) (io.ReadCloser, *Object, error) {
+	if !validOID.MatchString(oid) {
+		return nil, nil, fmt.Errorf("invalid OID: must be 64 lowercase hex characters")
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

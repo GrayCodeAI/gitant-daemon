@@ -86,8 +86,14 @@ func (rs *RevocationStore) Save() error {
 		return fmt.Errorf("creating directory: %w", err)
 	}
 
-	if err := os.WriteFile(rs.path, data, 0644); err != nil {
+	// Write to temp file first, then rename for atomicity
+	tmpPath := rs.path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("writing revocations file: %w", err)
+	}
+	if err := os.Rename(tmpPath, rs.path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("renaming revocations file: %w", err)
 	}
 
 	return nil

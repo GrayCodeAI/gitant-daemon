@@ -52,6 +52,9 @@ var doctorCmd = &cobra.Command{
 		// 1. Daemon connectivity
 		fmt.Println("\nDaemon:")
 		resp, err := http.Get(daemonURL + "/health")
+		if resp != nil {
+			defer resp.Body.Close()
+		}
 		check("Daemon reachable", err == nil && resp != nil && resp.StatusCode == 200,
 			func() string {
 				if err != nil {

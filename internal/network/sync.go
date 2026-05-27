@@ -233,7 +233,9 @@ func (c *SyncCoordinator) handleFederatedEvent(event FederatedEvent) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_ = c.node.SyncObjects(ctx, c.objects, peerID, event.Repo, hashes)
+	if err := c.node.SyncObjects(ctx, c.objects, peerID, event.Repo, hashes); err != nil {
+		slog.Debug("sync objects failed", "peer", peerID, "repo", event.Repo, "error", err)
+	}
 	for _, hash := range hashes {
 		c.pinLocalObject(ctx, event.Repo, hash)
 	}

@@ -38,8 +38,6 @@ func (s *IssueStore) Save() error {
 		return nil
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	// Deep copy to avoid race with concurrent mutations
 	data := make(map[string]map[string]*Issue, len(s.issues))
 	for repoID, repoIssues := range s.issues {
 		repoCopy := make(map[string]*Issue, len(repoIssues))
@@ -49,6 +47,7 @@ func (s *IssueStore) Save() error {
 		}
 		data[repoID] = repoCopy
 	}
+	s.mu.RUnlock()
 	return persistence.SaveJSON(s.path, data)
 }
 
@@ -63,7 +62,8 @@ func (s *IssueStore) Create(repoID, id, author, title, body string) *Issue {
 
 	issue := NewIssue(id, author, title, body)
 	s.issues[repoID][id] = issue
-	return issue
+	copy := *issue
+	return &copy
 }
 
 // Get returns an issue by repo and issue ID
@@ -81,7 +81,8 @@ func (s *IssueStore) Get(repoID, issueID string) (*Issue, error) {
 		return nil, fmt.Errorf("issue not found: %s", issueID)
 	}
 
-	return issue, nil
+	copy := *issue
+	return &copy, nil
 }
 
 // List returns all issues in a repository
@@ -96,7 +97,8 @@ func (s *IssueStore) List(repoID string) []*Issue {
 
 	result := make([]*Issue, 0, len(repo))
 	for _, issue := range repo {
-		result = append(result, issue)
+		copy := *issue
+		result = append(result, &copy)
 	}
 	return result
 }

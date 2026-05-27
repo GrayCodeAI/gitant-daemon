@@ -120,7 +120,7 @@ func (h *ImportHandler) Import(w http.ResponseWriter, r *http.Request) {
 
 	repo, err := h.repos.Create(req.Name, req.Name, req.Description, false)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, SanitizeError(err, "failed to create repository"), http.StatusBadRequest)
 		return
 	}
 
@@ -137,20 +137,3 @@ func (h *ImportHandler) Import(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GitHubImport imports from GitHub
-func (h *ImportHandler) GitHubImport(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "not_implemented",
-		"message": "GitHub import coming soon",
-	})
-}
-
-// GitLabImport imports from GitLab
-func (h *ImportHandler) GitLabImport(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "not_implemented",
-		"message": "GitLab import coming soon",
-	})
-}

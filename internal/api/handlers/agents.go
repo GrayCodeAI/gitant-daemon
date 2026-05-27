@@ -53,6 +53,21 @@ func (r *AgentRegistry) Save() error {
 	if r.dataDir == "" {
 		return nil
 	}
+	r.mu.RLock()
+	data := make(map[string]*Agent, len(r.agents))
+	for k, v := range r.agents {
+		copy := *v
+		data[k] = &copy
+	}
+	r.mu.RUnlock()
+	return persistence.SaveJSON(filepath.Join(r.dataDir, "agents.json"), data)
+}
+
+// saveLocked persists while the caller already holds the write lock.
+func (r *AgentRegistry) saveLocked() error {
+	if r.dataDir == "" {
+		return nil
+	}
 	return persistence.SaveJSON(filepath.Join(r.dataDir, "agents.json"), r.agents)
 }
 
@@ -107,7 +122,7 @@ func (r *AgentRegistry) ApplyAttestation(sourceDID, targetDID string, score floa
 	}
 	agent.LastSeen = time.Now()
 	_ = sourceDID
-	return r.Save()
+	return r.saveLocked()
 }
 
 // Get returns an agent by DID
@@ -115,7 +130,11 @@ func (r *AgentRegistry) Get(did string) (*Agent, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	agent, ok := r.agents[did]
-	return agent, ok
+	if !ok {
+		return nil, false
+	}
+	copy := *agent
+	return &copy, true
 }
 
 // List returns all known agents
@@ -124,7 +143,8 @@ func (r *AgentRegistry) List() []*Agent {
 	defer r.mu.RUnlock()
 	agents := make([]*Agent, 0, len(r.agents))
 	for _, a := range r.agents {
-		agents = append(agents, a)
+		copy := *a
+		agents = append(agents, &copy)
 	}
 	return agents
 }
@@ -197,7 +217,7 @@ func AttestAgent(registry *AgentRegistry, publish func(targetDID string, score f
 		}
 
 		if err := registry.ApplyAttestation(sourceDID, targetDID, req.Score); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, SanitizeError(err, "attestation failed"), http.StatusBadRequest)
 			return
 		}
 
@@ -207,13 +227,17 @@ func AttestAgent(registry *AgentRegistry, publish func(targetDID string, score f
 			}
 		}
 
-		agent, _ := registry.Get(targetDID)
+		agent, ok := registry.Get(targetDID)
+		trustScore := 0.5
+		if ok && agent != nil {
+			trustScore = agent.TrustScore
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":     true,
 			"target_did":  targetDID,
 			"source_did":  sourceDID,
-			"trust_score": agent.TrustScore,
+			"trust_score": trustScore,
 		})
 	}
 }
@@ -244,7 +268,7 @@ func DelegateCapability(id *identity.Identity) http.HandlerFunc {
 		ucan := identity.NewUCAN(id.DID, req.Audience, caps, 24*time.Hour)
 		token, err := ucan.Sign(id)
 		if err != nil {
-			http.Error(w, "failed to sign UCAN: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "failed to sign UCAN", http.StatusInternalServerError)
 			return
 		}
 
@@ -265,7 +289,7 @@ func GenerateDID() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := identity.NewIdentity()
 		if err != nil {
-			http.Error(w, "failed to generate DID: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "failed to generate DID", http.StatusInternalServerError)
 			return
 		}
 
@@ -302,7 +326,7 @@ func VerifyUCAN() http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"valid": false,
-				"error": err.Error(),
+				"error": "invalid UCAN token",
 			})
 			return
 		}
@@ -316,7 +340,7 @@ func VerifyUCAN() http.HandlerFunc {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"valid": false,
-					"error": "signature verification failed: " + err.Error(),
+					"error": "signature verification failed",
 				})
 				return
 			}
@@ -328,7 +352,7 @@ func VerifyUCAN() http.HandlerFunc {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"valid":  false,
-				"error":  err.Error(),
+				"error":  "UCAN validation failed",
 				"issuer": ucan.Issuer,
 			})
 			return

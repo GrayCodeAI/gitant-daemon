@@ -7,7 +7,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 )
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // Client is an HTTP client for the gitant daemon API
 type Client struct {
@@ -28,7 +31,7 @@ func NewClient(url string) *Client {
 
 // Get performs a GET request and decodes the JSON response
 func (c *Client) Get(path string, result interface{}) error {
-	resp, err := http.Get(c.BaseURL + path)
+	resp, err := httpClient.Get(c.BaseURL + path)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -58,7 +61,7 @@ func (c *Client) Post(path string, body interface{}, result interface{}) error {
 		return fmt.Errorf("encoding request: %w", err)
 	}
 
-	resp, err := http.Post(c.BaseURL+path, "application/json", bytes.NewReader(data))
+	resp, err := httpClient.Post(c.BaseURL+path, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -94,7 +97,7 @@ func (c *Client) Put(path string, body interface{}, result interface{}) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -124,7 +127,7 @@ func (c *Client) Delete(path string) error {
 		return fmt.Errorf("creating request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}

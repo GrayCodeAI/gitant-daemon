@@ -43,6 +43,22 @@ func (s *LabelStore) Save() error {
 	if s.dataDir == "" {
 		return nil
 	}
+	s.mu.RLock()
+	data := make(map[string][]Label, len(s.labels))
+	for k, v := range s.labels {
+		cp := make([]Label, len(v))
+		copy(cp, v)
+		data[k] = cp
+	}
+	s.mu.RUnlock()
+	return persistence.SaveJSON(filepath.Join(s.dataDir, "labels.json"), data)
+}
+
+// saveLocked persists while the caller already holds the write lock.
+func (s *LabelStore) saveLocked() error {
+	if s.dataDir == "" {
+		return nil
+	}
 	return persistence.SaveJSON(filepath.Join(s.dataDir, "labels.json"), s.labels)
 }
 
@@ -55,7 +71,9 @@ func (s *LabelStore) List(repoID string) []Label {
 	if labels == nil {
 		return []Label{}
 	}
-	return labels
+	cp := make([]Label, len(labels))
+	copy(cp, labels)
+	return cp
 }
 
 // Add adds a label to a repository
@@ -79,7 +97,7 @@ func (s *LabelStore) Add(repoID, name, color string) error {
 	}
 
 	s.labels[repoID] = append(s.labels[repoID], Label{Name: name, Color: color})
-	return s.Save()
+	return s.saveLocked()
 }
 
 // Remove removes a label from a repository
@@ -91,7 +109,7 @@ func (s *LabelStore) Remove(repoID, name string) error {
 	for i, l := range labels {
 		if l.Name == name {
 			s.labels[repoID] = append(labels[:i], labels[i+1:]...)
-			return s.Save()
+			return s.saveLocked()
 		}
 	}
 

@@ -48,7 +48,7 @@ func CreateLabel(store *crdt.LabelStore) http.HandlerFunc {
 		}
 
 		if err := store.Add(repoID, req.Name, req.Color); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
+			http.Error(w, SanitizeError(err, "failed to create label"), http.StatusConflict)
 			return
 		}
 
@@ -68,7 +68,7 @@ func DeleteLabel(store *crdt.LabelStore) http.HandlerFunc {
 		name := chi.URLParam(r, "name")
 
 		if err := store.Remove(repoID, name); err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "label not found"), http.StatusNotFound)
 			return
 		}
 

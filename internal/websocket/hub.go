@@ -4,42 +4,40 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-var allowedOrigins = []string{
+var defaultAllowedOrigins = []string{
 	"http://localhost:3303",
 	"http://localhost:3456",
 	"http://localhost:3000",
 	"https://gitant.dev",
-	"https://*.gitant.dev",
+	"https://app.gitant.dev",
 }
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return false
-		}
-		for _, allowed := range allowedOrigins {
-			if strings.HasSuffix(allowed, "*") {
-				// Wildcard subdomain matching
-				domain := strings.TrimPrefix(allowed, "https://*.")
-				if strings.HasSuffix(origin, "."+domain) || origin == "https://"+domain {
+func newUpgrader(origins []string) websocket.Upgrader {
+	if len(origins) == 0 {
+		origins = defaultAllowedOrigins
+	}
+	return websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return false
+			}
+			for _, allowed := range origins {
+				if origin == allowed {
 					return true
 				}
-			} else if origin == allowed {
-				return true
 			}
-		}
-		return false
-	},
+			return false
+		},
+	}
 }
 
 // Message represents a WebSocket message
@@ -50,12 +48,18 @@ type Message struct {
 
 // Client represents a WebSocket client
 type Client struct {
-	hub    *Hub
-	conn   *websocket.Conn
-	send   chan []byte
-	userID string
-	repos  map[string]bool
-	mu     sync.RWMutex
+	hub       *Hub
+	conn      *websocket.Conn
+	send      chan []byte
+	userID    string
+	repos     map[string]bool
+	mu        sync.RWMutex
+	closeOnce sync.Once
+}
+
+// closeSend safely closes the send channel exactly once.
+func (c *Client) closeSend() {
+	c.closeOnce.Do(func() { close(c.send) })
 }
 
 // Hub manages WebSocket clients
@@ -65,15 +69,22 @@ type Hub struct {
 	broadcast  chan []byte
 	register   chan *Client
 	unregister chan *Client
+	upgrader   websocket.Upgrader
 }
 
 // NewHub creates a new WebSocket hub
 func NewHub() *Hub {
+	return NewHubWithOrigins(nil)
+}
+
+// NewHubWithOrigins creates a new WebSocket hub with custom allowed origins
+func NewHubWithOrigins(origins []string) *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+		upgrader:   newUpgrader(origins),
 	}
 }
 
@@ -91,22 +102,34 @@ func (h *Hub) Run() {
 			h.mu.Lock()
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
-				close(client.send)
+				client.closeSend()
 			}
 			h.mu.Unlock()
 			slog.Info("websocket client disconnected", "user_id", client.userID)
 
 		case message := <-h.broadcast:
+			// Collect clients to remove after releasing read lock
+			var toRemove []*Client
 			h.mu.RLock()
 			for client := range h.clients {
 				select {
 				case client.send <- message:
 				default:
-					close(client.send)
-					delete(h.clients, client)
+					toRemove = append(toRemove, client)
 				}
 			}
 			h.mu.RUnlock()
+
+			if len(toRemove) > 0 {
+				h.mu.Lock()
+				for _, client := range toRemove {
+					if _, ok := h.clients[client]; ok {
+						client.closeSend()
+						delete(h.clients, client)
+					}
+				}
+				h.mu.Unlock()
+			}
 		}
 	}
 }
@@ -119,9 +142,8 @@ func (h *Hub) BroadcastToRepo(repoID string, msg Message) {
 		return
 	}
 
+	var toRemove []*Client
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	for client := range h.clients {
 		client.mu.RLock()
 		watching := client.repos[repoID]
@@ -131,10 +153,21 @@ func (h *Hub) BroadcastToRepo(repoID string, msg Message) {
 			select {
 			case client.send <- data:
 			default:
-				close(client.send)
+				toRemove = append(toRemove, client)
+			}
+		}
+	}
+	h.mu.RUnlock()
+
+	if len(toRemove) > 0 {
+		h.mu.Lock()
+		for _, client := range toRemove {
+			if _, ok := h.clients[client]; ok {
+				client.closeSend()
 				delete(h.clients, client)
 			}
 		}
+		h.mu.Unlock()
 	}
 }
 
@@ -146,18 +179,28 @@ func (h *Hub) BroadcastToUser(userID string, msg Message) {
 		return
 	}
 
+	var toRemove []*Client
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	for client := range h.clients {
 		if client.userID == userID {
 			select {
 			case client.send <- data:
 			default:
-				close(client.send)
+				toRemove = append(toRemove, client)
+			}
+		}
+	}
+	h.mu.RUnlock()
+
+	if len(toRemove) > 0 {
+		h.mu.Lock()
+		for _, client := range toRemove {
+			if _, ok := h.clients[client]; ok {
+				client.closeSend()
 				delete(h.clients, client)
 			}
 		}
+		h.mu.Unlock()
 	}
 }
 
@@ -182,7 +225,7 @@ func (h *Hub) ClientCount() int {
 // HandleWebSocket handles WebSocket connections
 func HandleWebSocket(hub *Hub, userID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := hub.upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			slog.Error("websocket upgrade failed", "error", err)
 			return

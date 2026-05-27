@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -57,9 +58,11 @@ func OpenPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFunc
 			author = "anonymous"
 		}
 
-		prID := fmt.Sprintf("pr-%d", time.Now().UnixNano())
+		prID := generateID("pr")
 		pr := store.Create(repoID, prID, author, req.Title, req.Body, req.SourceBranch, req.TargetBranch)
-		_ = store.Save()
+		if err := store.Save(); err != nil {
+			slog.Error("failed to persist pull request", "error", err)
+		}
 
 		wm.Dispatch(webhooks.Event{
 			Type: webhooks.EventPROpened,
@@ -133,7 +136,7 @@ func GetPR(store *crdt.PullRequestStore) http.HandlerFunc {
 
 		pr, err := store.Get(repoID, prID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "pull request not found"), http.StatusNotFound)
 			return
 		}
 
@@ -194,7 +197,7 @@ func ReviewPR(store *crdt.PullRequestStore, wm *webhooks.Manager) http.HandlerFu
 			return nil
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "pull request not found"), http.StatusNotFound)
 			return
 		}
 
@@ -229,45 +232,14 @@ func MergePR(store *crdt.PullRequestStore, registry *storage.RepositoryRegistry,
 			MergeMethod string `json:"merge_method"`
 		}
 		if r.Body != nil && r.ContentLength != 0 {
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
 		}
 		mergeMethod := req.MergeMethod
 		if mergeMethod == "" {
 			mergeMethod = "merge"
-		}
-
-		// Get PR to check status and target branch before mutating
-		pr, err := store.Get(repoID, prID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		if pr.Status != crdt.StatusOpen {
-			http.Error(w, "Pull request is not open", http.StatusBadRequest)
-			return
-		}
-
-		// Check branch protection
-		if protections != nil {
-			prot := protections.Get(repoID, pr.TargetBranch)
-			if prot != nil {
-				if prot.RequireApproval {
-					hasApproval := false
-					for _, op := range pr.Log().Operations() {
-						if op.Type == crdt.OpAddComment {
-							if comment, ok := op.Data["comment"].(string); ok && strings.Contains(comment, "Review [approve]") {
-								hasApproval = true
-								break
-							}
-						}
-					}
-					if !hasApproval {
-						http.Error(w, "Branch protection requires approval before merging", http.StatusForbidden)
-						return
-					}
-				}
-					// NoForcePush protection is enforced at push time, not merge time
-			}
 		}
 
 		author := authMiddleware.GetIdentity(r)
@@ -275,26 +247,65 @@ func MergePR(store *crdt.PullRequestStore, registry *storage.RepositoryRegistry,
 			author = "anonymous"
 		}
 
+		// Atomically check status and set to merging to prevent concurrent merges
+		var prTargetBranch, prSourceBranch string
+		err := store.Update(repoID, prID, func(pr *crdt.PullRequest) error {
+			if pr.Status != crdt.StatusOpen {
+				return fmt.Errorf("pull request is not open")
+			}
+
+			// Check branch protection
+			if protections != nil {
+				prot := protections.Get(repoID, pr.TargetBranch)
+				if prot != nil {
+					if prot.RequireApproval {
+						hasApproval := false
+						for _, op := range pr.Log().Operations() {
+							if op.Type == crdt.OpAddComment {
+								if comment, ok := op.Data["comment"].(string); ok && strings.Contains(comment, "Review [approve]") {
+									hasApproval = true
+									break
+								}
+							}
+						}
+						if !hasApproval {
+							return fmt.Errorf("branch protection requires approval before merging")
+						}
+					}
+				}
+			}
+
+			prTargetBranch = pr.TargetBranch
+			prSourceBranch = pr.SourceBranch
+			pr.SetStatus(author, crdt.StatusMerged)
+			return nil
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "not open") {
+				http.Error(w, "Pull request is not open", http.StatusBadRequest)
+			} else if strings.Contains(err.Error(), "approval") {
+				http.Error(w, err.Error(), http.StatusForbidden)
+			} else {
+				http.Error(w, SanitizeError(err, "pull request not found"), http.StatusNotFound)
+			}
+			return
+		}
+
 		repo, err := registry.Open(repoID)
 		if err != nil {
 			http.Error(w, "Repository not found", http.StatusNotFound)
 			return
 		}
-		mergeHash, err := repo.MergeBranches(pr.TargetBranch, pr.SourceBranch, author, "", mergeMethod)
+		mergeHash, err := repo.MergeBranches(prTargetBranch, prSourceBranch, author, "", mergeMethod)
 		if err != nil {
+			// Revert status back to open on merge failure
+			_ = store.Update(repoID, prID, func(pr *crdt.PullRequest) error {
+				pr.SetStatus(author, crdt.StatusOpen)
+				return nil
+			})
 			http.Error(w, fmt.Sprintf("Failed to merge branch: %v", err), http.StatusInternalServerError)
 			return
 		}
-
-		err = store.Update(repoID, prID, func(pr *crdt.PullRequest) error {
-			pr.SetStatus(author, crdt.StatusMerged)
-			return nil
-		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
 		wm.Dispatch(webhooks.Event{
 			Type: webhooks.EventPRMerged,
 			Repo: repoID,
@@ -323,7 +334,7 @@ func ListPRComments(store *crdt.PullRequestStore) http.HandlerFunc {
 
 		pr, err := store.Get(repoID, prID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "pull request not found"), http.StatusNotFound)
 			return
 		}
 

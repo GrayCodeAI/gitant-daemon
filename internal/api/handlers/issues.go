@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -57,13 +57,25 @@ func CreateIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc 
 			author = "anonymous"
 		}
 
-		issueID := fmt.Sprintf("issue-%d", time.Now().UnixNano())
-		issue := store.Create(repoID, issueID, author, req.Title, req.Body)
+		issueID := generateID("issue")
+		store.Create(repoID, issueID, author, req.Title, req.Body)
 
-		for _, label := range req.Labels {
-			issue.AddLabel(author, label)
+		if len(req.Labels) > 0 {
+			if err := store.Update(repoID, issueID, func(iss *crdt.Issue) error {
+				for _, label := range req.Labels {
+					iss.AddLabel(author, label)
+				}
+				return nil
+			}); err != nil {
+				slog.Error("failed to add labels to issue", "error", err)
+			}
 		}
-		_ = store.Save()
+
+		issue, err := store.Get(repoID, issueID)
+		if err != nil {
+			http.Error(w, "failed to retrieve created issue", http.StatusInternalServerError)
+			return
+		}
 
 		wm.Dispatch(webhooks.Event{
 			Type: webhooks.EventIssueCreated,
@@ -135,7 +147,7 @@ func GetIssue(store *crdt.IssueStore) http.HandlerFunc {
 
 		issue, err := store.Get(repoID, issueID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "issue not found"), http.StatusNotFound)
 			return
 		}
 
@@ -185,7 +197,7 @@ func CommentIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc
 			return nil
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "issue not found"), http.StatusNotFound)
 			return
 		}
 
@@ -225,7 +237,7 @@ func CloseIssue(store *crdt.IssueStore, wm *webhooks.Manager) http.HandlerFunc {
 			return nil
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "issue not found"), http.StatusNotFound)
 			return
 		}
 
@@ -256,7 +268,7 @@ func ListIssueComments(store *crdt.IssueStore) http.HandlerFunc {
 
 		issue, err := store.Get(repoID, issueID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "issue not found"), http.StatusNotFound)
 			return
 		}
 

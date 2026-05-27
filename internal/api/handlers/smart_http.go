@@ -3,7 +3,7 @@ package handlers
 import (
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -92,7 +92,7 @@ func GitUploadPack(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		// Generate packfile
 		packData, err := generatePackfile(repo, objects)
 		if err != nil {
-			log.Printf("error generating packfile: %v", err)
+			slog.Error("error generating packfile", "error", err)
 			http.Error(w, "generating packfile", http.StatusInternalServerError)
 			return
 		}
@@ -170,7 +170,7 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 			packData := strings.Join(lines[packStart:], "")
 			hashes, err := ingestPackfile(repo, []byte(packData))
 			if err != nil {
-				log.Printf("error ingesting packfile: %v", err)
+				slog.Error("error ingesting packfile", "error", err)
 			} else {
 				objectHashes = hashes
 			}
@@ -180,13 +180,13 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 		for _, update := range updates {
 			if update.NewHash == "0000000000000000000000000000000000000000" {
 				if err := repo.DeleteRef(update.RefName); err != nil {
-					log.Printf("warning: failed to delete ref %s: %v", update.RefName, err)
+					slog.Warn("failed to delete ref", "ref", update.RefName, "error", err)
 				}
 				continue
 			}
 			hash := plumbing.NewHash(update.NewHash)
 			if err := repo.UpdateRef(update.RefName, hash); err != nil {
-				log.Printf("warning: failed to update ref %s: %v", update.RefName, err)
+				slog.Warn("failed to update ref", "ref", update.RefName, "error", err)
 			}
 		}
 
@@ -346,7 +346,7 @@ func ingestPackfile(repo *storage.Repository, data []byte) ([]string, error) {
 	for _, obj := range objects {
 		hashes = append(hashes, obj.Hash.String())
 		if err := repo.StoreObject(obj.Hash, obj.Type, obj.Content); err != nil {
-			log.Printf("warning: failed to store object %s: %v", obj.Hash, err)
+			slog.Warn("failed to store object", "hash", obj.Hash, "error", err)
 		}
 	}
 
@@ -376,8 +376,12 @@ func (sw *sidebandWriter) Write(data []byte) (int, error) {
 		// Write pkt-line: <length><channel><data>
 		length := len(chunk) + 5 // +4 for length, +1 for channel
 		header := fmt.Sprintf("%04x%c", length, 1) // channel 1
-		sw.w.Write([]byte(header))
-		sw.w.Write(chunk)
+		if _, err := sw.w.Write([]byte(header)); err != nil {
+			return 0, err
+		}
+		if _, err := sw.w.Write(chunk); err != nil {
+			return 0, err
+		}
 	}
 	return len(data), nil
 }

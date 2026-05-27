@@ -63,7 +63,15 @@ func (s *TaskStore) Save() error {
 	if s.dataDir == "" {
 		return nil
 	}
-	return persistence.SaveJSON(filepath.Join(s.dataDir, "tasks.json"), s.tasks)
+	s.mu.RLock()
+	data := make(map[string][]Task, len(s.tasks))
+	for k, v := range s.tasks {
+		cp := make([]Task, len(v))
+		copy(cp, v)
+		data[k] = cp
+	}
+	s.mu.RUnlock()
+	return persistence.SaveJSON(filepath.Join(s.dataDir, "tasks.json"), data)
 }
 
 // List returns a copy of all tasks for a repository, optionally filtered by status
@@ -103,7 +111,8 @@ func (s *TaskStore) Create(repoID, id, createdBy, title, description string) *Ta
 	}
 
 	s.tasks[repoID] = append(s.tasks[repoID], task)
-	return &s.tasks[repoID][len(s.tasks[repoID])-1]
+	copy := task
+	return &copy
 }
 
 // Claim claims a task

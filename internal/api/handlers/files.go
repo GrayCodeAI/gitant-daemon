@@ -21,7 +21,7 @@ func ListFiles(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		repo, err := registry.Open(repoID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
@@ -62,7 +62,7 @@ func ListFiles(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		entries, err := repo.ListTreeEntries(commit.TreeHash, path)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, SanitizeError(err, "failed to list entries"), http.StatusInternalServerError)
 			return
 		}
 
@@ -101,9 +101,15 @@ func GetFile(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		path := chi.URLParam(r, "path")
 		ref := r.URL.Query().Get("ref")
 
+		// Validate path to prevent traversal
+		if strings.Contains(path, "..") || strings.Contains(path, "\x00") || strings.HasPrefix(path, "/") {
+			http.Error(w, "invalid file path", http.StatusBadRequest)
+			return
+		}
+
 		repo, err := registry.Open(repoID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
@@ -141,7 +147,7 @@ func GetFile(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		content, err := repo.GetFileFromTree(commit.TreeHash, path)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "file not found"), http.StatusNotFound)
 			return
 		}
 
@@ -164,7 +170,7 @@ func SearchCode(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		repo, err := registry.Open(repoID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
 		}
 
@@ -197,7 +203,7 @@ func SearchCode(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		// Get commit to access tree
 		commit, err := repo.GetCommit(startHash)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, SanitizeError(err, "commit not found"), http.StatusInternalServerError)
 			return
 		}
 
@@ -219,7 +225,17 @@ func SearchCode(registry *storage.RepositoryRegistry) http.HandlerFunc {
 // searchTree recursively walks the tree and finds blobs containing the query
 // rootHash is used for GetFileFromTree (full path resolution), currentHash is the subtree being listed
 func searchTree(repo *storage.Repository, rootHash, currentHash plumbing.Hash, path string, query string) []map[string]interface{} {
+	return searchTreeDepth(repo, rootHash, currentHash, path, query, 0)
+}
+
+const maxSearchDepth = 32
+
+func searchTreeDepth(repo *storage.Repository, rootHash, currentHash plumbing.Hash, path string, query string, depth int) []map[string]interface{} {
 	var results []map[string]interface{}
+
+	if depth >= maxSearchDepth {
+		return results
+	}
 
 	entries, err := repo.ListTreeEntries(currentHash, "")
 	if err != nil {
@@ -235,7 +251,7 @@ func searchTree(repo *storage.Repository, rootHash, currentHash plumbing.Hash, p
 		}
 
 		if entry.Mode == filemode.Dir {
-			subResults := searchTree(repo, rootHash, entry.Hash, entryPath, query)
+			subResults := searchTreeDepth(repo, rootHash, entry.Hash, entryPath, query, depth+1)
 			results = append(results, subResults...)
 		} else {
 			content, err := repo.GetFileFromTree(rootHash, entryPath)
