@@ -40,7 +40,7 @@ func (c *LDAPClient) Authenticate(username, password string) (string, []string, 
 		return "", nil, fmt.Errorf("LDAP not enabled")
 	}
 
-	addr := fmt.Sprintf("%s:%d", c.cfg.Host, c.cfg.Port)
+	addr := net.JoinHostPort(c.cfg.Host, fmt.Sprintf("%d", c.cfg.Port))
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
 		return "", nil, fmt.Errorf("LDAP connection failed: %w", err)
