@@ -464,6 +464,9 @@ func (s *Server) setupRoutes() {
 
 	// LFS endpoints
 	// (placeholder - requires LFS store initialization)
+
+	// Extended endpoints (packages, wiki, notifications, bounties, governance, etc.)
+	// These are wired when the extended handler is initialized
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

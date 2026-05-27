@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"sync"
@@ -258,6 +259,7 @@ func (m *AuthManager) GetOAuth2Providers() []*OAuth2Provider {
 }
 
 func hashKey(key string) string {
-	// Simple hash for demo - use bcrypt in production
-	return fmt.Sprintf("%x", key)
+	// Use SHA-256 for API key hashing
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:])
 }
