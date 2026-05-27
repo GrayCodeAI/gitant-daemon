@@ -4,17 +4,41 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+var allowedOrigins = []string{
+	"http://localhost:3303",
+	"http://localhost:3456",
+	"http://localhost:3000",
+	"https://gitant.dev",
+	"https://*.gitant.dev",
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return false
+		}
+		for _, allowed := range allowedOrigins {
+			if strings.HasSuffix(allowed, "*") {
+				// Wildcard subdomain matching
+				domain := strings.TrimPrefix(allowed, "https://*.")
+				if strings.HasSuffix(origin, "."+domain) || origin == "https://"+domain {
+					return true
+				}
+			} else if origin == allowed {
+				return true
+			}
+		}
+		return false
 	},
 }
 

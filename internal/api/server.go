@@ -404,8 +404,11 @@ func (s *Server) setupRoutes() {
 		})
 
 		userHandler := handlers.NewUserHandler(s.authService.Users)
-		s.router.Get("/api/v1/users", userHandler.ListUsers)
-		s.router.Get("/api/v1/users/{id}", userHandler.GetUser)
+		s.router.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Get("/api/v1/users", userHandler.ListUsers)
+			r.Get("/api/v1/users/{id}", userHandler.GetUser)
+		})
 	}
 
 	// Review comment endpoints
@@ -418,25 +421,34 @@ func (s *Server) setupRoutes() {
 				r.Post("/", reviewHandler.CreateComment)
 			})
 		})
-		s.router.Post("/api/v1/review-comments/{commentId}/resolve", reviewHandler.ResolveComment)
-		s.router.Delete("/api/v1/review-comments/{commentId}", reviewHandler.DeleteComment)
+		s.router.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Post("/api/v1/review-comments/{commentId}/resolve", reviewHandler.ResolveComment)
+			r.Delete("/api/v1/review-comments/{commentId}", reviewHandler.DeleteComment)
+		})
 	}
 
-	// Actions/CI endpoints
+	// Actions/CI endpoints (read-only, public)
 	actionsHandler := handlers.NewActionsHandler(s.runner)
 	s.router.Get("/api/v1/actions/runs", actionsHandler.ListRuns)
 	s.router.Get("/api/v1/actions/runs/{runId}", actionsHandler.GetRun)
 
-	// Import/Export endpoints
-	importHandler := handlers.NewImportHandler(s.repos, s.issues, s.prs, s.webhooks)
-	s.router.Post("/api/v1/import", importHandler.Import)
-	s.router.Post("/api/v1/export", importHandler.Export)
-	s.router.Post("/api/v1/import/github", importHandler.GitHubImport)
-	s.router.Post("/api/v1/import/gitlab", importHandler.GitLabImport)
+	// Import/Export endpoints (authenticated)
+	s.router.Group(func(r chi.Router) {
+		r.Use(authMiddleware.RequireIdentity)
+		importHandler := handlers.NewImportHandler(s.repos, s.issues, s.prs, s.webhooks)
+		r.Post("/api/v1/import", importHandler.Import)
+		r.Post("/api/v1/export", importHandler.Export)
+		r.Post("/api/v1/import/github", importHandler.GitHubImport)
+		r.Post("/api/v1/import/gitlab", importHandler.GitLabImport)
+	})
 
-	// Batch operations
-	batchHandler := handlers.NewBatchHandler(s.issues, s.prs, s.webhooks)
-	s.router.Post("/api/v1/batch", batchHandler.Execute)
+	// Batch operations (authenticated)
+	s.router.Group(func(r chi.Router) {
+		r.Use(authMiddleware.RequireIdentity)
+		batchHandler := handlers.NewBatchHandler(s.issues, s.prs, s.webhooks)
+		r.Post("/api/v1/batch", batchHandler.Execute)
+	})
 
 	// OpenAPI spec
 	s.router.Get("/api/v1/openapi.json", handlers.HandleOpenAPI)

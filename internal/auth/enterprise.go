@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base32"
 	"encoding/binary"
@@ -40,6 +41,9 @@ func (c *LDAPClient) Authenticate(username, password string) (string, []string, 
 		return "", nil, fmt.Errorf("LDAP not enabled")
 	}
 
+	// Escape LDAP special characters to prevent injection
+	safeUsername := escapeLDAP(username)
+
 	addr := net.JoinHostPort(c.cfg.Host, fmt.Sprintf("%d", c.cfg.Port))
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
@@ -49,11 +53,23 @@ func (c *LDAPClient) Authenticate(username, password string) (string, []string, 
 
 	// Simple LDAP bind simulation
 	// In production, use a proper LDAP library
-	userDN := fmt.Sprintf("uid=%s,%s", username, c.cfg.BaseDN)
+	userDN := fmt.Sprintf("uid=%s,%s", safeUsername, c.cfg.BaseDN)
 
 	// Return user DN and groups
 	groups := []string{"users"}
 	return userDN, groups, nil
+}
+
+// escapeLDAP escapes special characters in LDAP strings
+func escapeLDAP(s string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\5c",
+		"*", "\\2a",
+		"(", "\\28",
+		")", "\\29",
+		"\x00", "\\00",
+	)
+	return replacer.Replace(s)
 }
 
 // TOTPConfig represents TOTP configuration
@@ -86,8 +102,8 @@ func NewTOTP(cfg TOTPConfig) *TOTP {
 // GenerateSecret generates a new TOTP secret
 func (t *TOTP) GenerateSecret() string {
 	secret := make([]byte, 20)
-	for i := range secret {
-		secret[i] = byte(i + 1) // In production, use crypto/rand
+	if _, err := rand.Read(secret); err != nil {
+		panic(fmt.Sprintf("failed to generate random secret: %v", err))
 	}
 	return base32.StdEncoding.EncodeToString(secret)
 }
@@ -165,10 +181,14 @@ func NewBackupCodes(cfg BackupCodeConfig) *BackupCodes {
 // Generate generates backup codes
 func (b *BackupCodes) Generate() []string {
 	codes := make([]string, b.cfg.Count)
+	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	for i := range codes {
 		code := make([]byte, b.cfg.Length)
+		if _, err := rand.Read(code); err != nil {
+			panic(fmt.Sprintf("failed to generate random code: %v", err))
+		}
 		for j := range code {
-			code[j] = byte('A' + (j % 26)) // In production, use crypto/rand
+			code[j] = charset[int(code[j])%len(charset)]
 		}
 		codes[i] = strings.ToUpper(string(code))
 	}

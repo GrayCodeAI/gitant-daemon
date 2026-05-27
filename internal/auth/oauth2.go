@@ -105,7 +105,7 @@ func (m *AuthManager) GenerateAPIKey(did, name string, scopes []string, expiresA
 	prefix := rawKey[:8]
 
 	apiKey := &APIKey{
-		ID:        fmt.Sprintf("key-%d", time.Now().UnixNano()),
+		ID:        fmt.Sprintf("key-%x", generateRandomID()),
 		Name:      name,
 		KeyHash:   hashKey(rawKey),
 		Prefix:    prefix,
@@ -215,7 +215,7 @@ func (m *AuthManager) CreateSession(did, ip, userAgent string, duration time.Dur
 	defer m.mu.Unlock()
 
 	session := &Session{
-		ID:        fmt.Sprintf("sess-%d", time.Now().UnixNano()),
+		ID:        fmt.Sprintf("sess-%x", generateRandomID()),
 		DID:       did,
 		IP:        ip,
 		UserAgent: userAgent,
@@ -262,4 +262,10 @@ func hashKey(key string) string {
 	// Use SHA-256 for API key hashing
 	h := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(h[:])
+}
+
+func generateRandomID() [16]byte {
+	var id [16]byte
+	rand.Read(id[:])
+	return id
 }
