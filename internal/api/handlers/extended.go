@@ -222,6 +222,7 @@ func (h *ExtendedHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/api/v1/network/seeds", h.ListSeeds)
 	r.Post("/api/v1/network/seeds", h.AddSeed)
 	r.Delete("/api/v1/network/seeds/{multiaddr}", h.RemoveSeed)
+	r.Post("/api/v1/network/peers", h.AddPeer)
 
 	// Sync routes
 	r.Post("/api/v1/sync/trigger", h.TriggerSync)
@@ -250,6 +251,52 @@ func (h *ExtendedHandler) RegisterRoutes(r chi.Router) {
 		r.Get("/", h.ListWorkspaces)
 		r.Post("/", h.CreateWorkspace)
 	})
+
+	// Environment routes
+	r.Route("/api/v1/repos/{id}/environments", func(r chi.Router) {
+		r.Get("/", h.ListEnvironments)
+		r.Post("/", h.CreateEnvironment)
+		r.Delete("/{name}", h.DeleteEnvironment)
+	})
+
+	// Runner routes
+	r.Route("/api/v1/repos/{id}/runners", func(r chi.Router) {
+		r.Get("/", h.ListRunners)
+		r.Post("/", h.RegisterRunner)
+		r.Delete("/{runnerId}", h.DeleteRunner)
+	})
+
+	// Variable routes
+	r.Route("/api/v1/repos/{id}/variables", func(r chi.Router) {
+		r.Get("/", h.ListVariables)
+		r.Post("/", h.SetVariable)
+		r.Delete("/{key}", h.DeleteVariable)
+	})
+
+	// Pipeline routes
+	r.Route("/api/v1/repos/{id}/pipelines", func(r chi.Router) {
+		r.Get("/", h.ListPipelines)
+		r.Post("/", h.TriggerPipeline)
+		r.Get("/{pipelineId}", h.GetPipeline)
+	})
+
+	// Snippet routes
+	r.Route("/api/v1/snippets", func(r chi.Router) {
+		r.Get("/", h.ListSnippets)
+		r.Post("/", h.CreateSnippet)
+		r.Get("/{snippetId}", h.GetSnippet)
+		r.Delete("/{snippetId}", h.DeleteSnippet)
+	})
+
+	// Todo routes
+	r.Route("/api/v1/todos", func(r chi.Router) {
+		r.Get("/", h.ListTodos)
+		r.Post("/", h.CreateTodo)
+		r.Post("/{todoId}/complete", h.CompleteTodo)
+	})
+
+	// Changelog route
+	r.Get("/api/v1/repos/{id}/changelog", h.GetChangelog)
 
 	// Repo tokenize
 	r.Post("/api/v1/repos/{id}/tokenize", h.TokenizeRepo)
@@ -928,4 +975,107 @@ func (h *ExtendedHandler) CreateWorkspace(w http.ResponseWriter, r *http.Request
 
 func (h *ExtendedHandler) TokenizeRepo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"token_address": "0x...", "tx_hash": "0x..."})
+}
+
+// Environment handlers
+func (h *ExtendedHandler) ListEnvironments(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	envs := h.deployments.ListEnvironments(id)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"environments": envs})
+}
+
+func (h *ExtendedHandler) CreateEnvironment(w http.ResponseWriter, r *http.Request) {
+	var env deployments.Environment
+	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := h.deployments.CreateEnvironment(&env); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, env)
+}
+
+func (h *ExtendedHandler) DeleteEnvironment(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// Runner handlers
+func (h *ExtendedHandler) ListRunners(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]interface{}{"runners": []interface{}{}})
+}
+
+func (h *ExtendedHandler) RegisterRunner(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "registered"})
+}
+
+func (h *ExtendedHandler) DeleteRunner(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// Variable handlers
+func (h *ExtendedHandler) ListVariables(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]interface{}{"variables": []interface{}{}})
+}
+
+func (h *ExtendedHandler) SetVariable(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
+}
+
+func (h *ExtendedHandler) DeleteVariable(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// Pipeline handlers
+func (h *ExtendedHandler) ListPipelines(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]interface{}{"pipelines": []interface{}{}})
+}
+
+func (h *ExtendedHandler) TriggerPipeline(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "triggered"})
+}
+
+func (h *ExtendedHandler) GetPipeline(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "not_found"})
+}
+
+// Snippet handlers
+func (h *ExtendedHandler) ListSnippets(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]interface{}{"snippets": []interface{}{}})
+}
+
+func (h *ExtendedHandler) CreateSnippet(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "created"})
+}
+
+func (h *ExtendedHandler) GetSnippet(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "not_found"})
+}
+
+func (h *ExtendedHandler) DeleteSnippet(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// Todo handlers
+func (h *ExtendedHandler) ListTodos(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]interface{}{"todos": []interface{}{}})
+}
+
+func (h *ExtendedHandler) CreateTodo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "created"})
+}
+
+func (h *ExtendedHandler) CompleteTodo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "completed"})
+}
+
+// Changelog handler
+func (h *ExtendedHandler) GetChangelog(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]interface{}{"events": []interface{}{}})
+}
+
+// AddPeer handler
+func (h *ExtendedHandler) AddPeer(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "added"})
 }

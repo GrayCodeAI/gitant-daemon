@@ -276,7 +276,7 @@ func (s *Server) setupRoutes() {
 		handlers.DiscoverFederation(s.network)(w, r)
 	}))
 	s.router.Handle("/metrics", promhttp.Handler())
-	s.router.Get("/api/v1/openapi.json", handleOpenAPI)
+	s.router.Get("/api/v1/openapi.json", handlers.HandleOpenAPI)
 
 	// Repository endpoints
 	s.router.Route("/api/v1/repos", func(r chi.Router) {
@@ -467,6 +467,13 @@ func (s *Server) setupRoutes() {
 
 	// Extended endpoints (packages, wiki, notifications, bounties, governance, etc.)
 	// These are wired when the extended handler is initialized
+}
+
+// SetExtendedHandler wires up the extended routes (packages, wiki, notifications, etc.)
+func (s *Server) SetExtendedHandler(h *handlers.ExtendedHandler) {
+	if h != nil {
+		h.RegisterRoutes(s.router)
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
