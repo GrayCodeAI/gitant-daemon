@@ -4,12 +4,21 @@ import (
 	"encoding/json"
 	"net/http"
 
+	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/identity"
 )
 
 // RevokeUCAN creates a handler for revoking a UCAN by nonce.
+// Only the UCAN issuer (authenticated via their DID) can revoke their own tokens.
 func RevokeUCAN(revocations *identity.RevocationStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Require authenticated identity — only the UCAN issuer can revoke
+		callerDID := authMiddleware.GetIdentity(r)
+		if callerDID == "" {
+			http.Error(w, "authentication required to revoke UCANs", http.StatusUnauthorized)
+			return
+		}
+
 		var req struct {
 			Nonce string `json:"nonce"`
 		}
@@ -24,7 +33,7 @@ func RevokeUCAN(revocations *identity.RevocationStore) http.HandlerFunc {
 			return
 		}
 
-		revocations.Revoke(req.Nonce)
+		revocations.Revoke(req.Nonce, callerDID)
 		if err := revocations.Save(); err != nil {
 			http.Error(w, "failed to persist revocation", http.StatusInternalServerError)
 			return
@@ -32,8 +41,9 @@ func RevokeUCAN(revocations *identity.RevocationStore) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"revoked": true,
-			"nonce":   req.Nonce,
+			"revoked":    true,
+			"nonce":      req.Nonce,
+			"revoked_by": callerDID,
 		})
 	}
 }

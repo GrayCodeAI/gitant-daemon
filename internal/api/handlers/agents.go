@@ -242,7 +242,9 @@ func AttestAgent(registry *AgentRegistry, publish func(targetDID string, score f
 	}
 }
 
-// DelegateCapability creates and signs a UCAN capability token
+// DelegateCapability creates and signs a UCAN capability token.
+// The caller must present a valid UCAN with the capabilities they wish to delegate.
+// The server identity signs the new UCAN, but only after verifying the caller's delegation chain.
 func DelegateCapability(id *identity.Identity) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -259,6 +261,21 @@ func DelegateCapability(id *identity.Identity) http.HandlerFunc {
 		if req.Audience == "" || req.Resource == "" || len(req.Actions) == 0 {
 			http.Error(w, "audience, resource, and actions are required", http.StatusBadRequest)
 			return
+		}
+
+		// Verify the caller has a UCAN with the capabilities they're trying to delegate.
+		// The caller's UCAN must cover each requested (resource, action) pair.
+		callerUCAN := authMiddleware.GetUCAN(r)
+		if callerUCAN == nil {
+			http.Error(w, "UCAN capability token required to delegate capabilities", http.StatusForbidden)
+			return
+		}
+
+		for _, action := range req.Actions {
+			if !callerUCAN.HasCapability(req.Resource, action) {
+				http.Error(w, fmt.Sprintf("insufficient capabilities: cannot delegate %s on %s", action, req.Resource), http.StatusForbidden)
+				return
+			}
 		}
 
 		caps := []identity.Capability{
@@ -331,21 +348,30 @@ func VerifyUCAN() http.HandlerFunc {
 			return
 		}
 
-		// Extract public key from issuer DID and verify signature
+		// Extract public key from issuer DID and verify signature.
+		// Reject tokens where the issuer's public key cannot be extracted —
+		// accepting unsigned tokens would allow forged UCANs to pass verification.
 		pubKey, keyErr := identity.ExtractPublicKeyFromDID(ucan.Issuer)
-		if keyErr == nil {
-			ucan, err = identity.VerifySignedUCANByKey(req.Token, pubKey)
-			if err != nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"valid": false,
-					"error": "signature verification failed",
-				})
-				return
-			}
+		if keyErr != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"valid": false,
+				"error": "cannot extract public key from issuer DID: " + keyErr.Error(),
+			})
+			return
 		}
-		// If keyErr != nil, ucan is already decoded from DecodeUCAN above (unsigned token)
+
+		ucan, err = identity.VerifySignedUCANByKey(req.Token, pubKey)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"valid": false,
+				"error": "signature verification failed",
+			})
+			return
+		}
 
 		// Validate time bounds
 		if err := ucan.Validate(); err != nil {
@@ -369,7 +395,8 @@ func VerifyUCAN() http.HandlerFunc {
 	}
 }
 
-// ResolveDID resolves a DID to its document
+// ResolveDID resolves a DID to its document.
+// Supports did:key (self-resolving) and did:web (HTTPS well-known fetch).
 func ResolveDID() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		did := chi.URLParam(r, "did")
@@ -378,27 +405,40 @@ func ResolveDID() http.HandlerFunc {
 			return
 		}
 
-		// For did:key, we can reconstruct the document from the DID itself
-		// The DID contains the public key: did:key:z<base64url-pubkey>
-		if len(did) < 10 || did[:8] != "did:key:" {
-			http.Error(w, "unsupported DID method", http.StatusBadRequest)
-			return
-		}
+		var doc map[string]interface{}
 
-		doc := map[string]interface{}{
-			"@context": []string{
-				"https://www.w3.org/ns/did/v1",
-				"https://w3id.org/security/suites/ed25519-2020/v1",
-			},
-			"id": did,
-			"verificationMethod": []map[string]interface{}{
-				{
-					"id":         did + "#controller",
-					"type":       "Ed25519VerificationKey2020",
-					"controller": did,
+		switch {
+		case len(did) >= 10 && did[:8] == "did:key:":
+			// did:key is self-resolving — reconstruct document from the embedded public key
+			doc = map[string]interface{}{
+				"@context": []string{
+					"https://www.w3.org/ns/did/v1",
+					"https://w3id.org/security/suites/ed25519-2020/v1",
 				},
-			},
-			"authentication": []string{did + "#controller"},
+				"id": did,
+				"verificationMethod": []map[string]interface{}{
+					{
+						"id":         did + "#controller",
+						"type":       "Ed25519VerificationKey2020",
+						"controller": did,
+					},
+				},
+				"authentication": []string{did + "#controller"},
+			}
+
+		case len(did) >= 9 && did[:8] == "did:web:":
+			// did:web resolves via HTTPS well-known document
+			var err error
+			doc, err = identity.ResolveDIDWeb(did)
+			if err != nil {
+				slog.Warn("did:web resolution failed", "did", did, "error", err)
+				http.Error(w, "failed to resolve did:web: "+err.Error(), http.StatusBadGateway)
+				return
+			}
+
+		default:
+			http.Error(w, "unsupported DID method (supported: did:key, did:web)", http.StatusBadRequest)
+			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")

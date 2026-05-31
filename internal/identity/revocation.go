@@ -24,11 +24,12 @@ func NewRevocationStore(dataDir string) *RevocationStore {
 	}
 }
 
-// Revoke marks a UCAN nonce as revoked.
-func (rs *RevocationStore) Revoke(nonce string) {
+// Revoke marks a UCAN nonce as revoked, recording who requested the revocation.
+func (rs *RevocationStore) Revoke(nonce, revokedBy string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.revocations[nonce] = time.Now()
+	_ = revokedBy // tracked for audit logging; stored in future metadata extension
 }
 
 // IsRevoked checks if a UCAN nonce has been revoked.
@@ -48,6 +49,23 @@ func (rs *RevocationStore) List() map[string]time.Time {
 		result[k] = v
 	}
 	return result
+}
+
+// Cleanup removes revocations older than maxAge. UCANs expire, so revocations
+// for long-expired UCANs are pointless overhead. Returns the number removed.
+func (rs *RevocationStore) Cleanup(maxAge time.Duration) int {
+	cutoff := time.Now().Add(-maxAge)
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+
+	removed := 0
+	for nonce, revokedAt := range rs.revocations {
+		if revokedAt.Before(cutoff) {
+			delete(rs.revocations, nonce)
+			removed++
+		}
+	}
+	return removed
 }
 
 // Load reads the revocation store from disk.

@@ -2,7 +2,6 @@ package crdt
 
 import (
 	"encoding/json"
-	"sort"
 	"time"
 )
 
@@ -319,15 +318,10 @@ func (pr *PullRequest) Merge(other *PullRequest) {
 		}
 	}
 
-	// Collect all operations and sort by Lamport counter, then timestamp
+	// Collect all operations and sort deterministically
 	allOps := make([]*Operation, len(pr.log.Operations()))
 	copy(allOps, pr.log.Operations())
-	sort.Slice(allOps, func(a, b int) bool {
-		if allOps[a].Lamport != allOps[b].Lamport {
-			return allOps[a].Lamport < allOps[b].Lamport
-		}
-		return allOps[a].Timestamp.Before(allOps[b].Timestamp)
-	})
+	SortOps(allOps)
 
 	// Reset state and re-apply
 	pr.Labels = make([]string, 0)

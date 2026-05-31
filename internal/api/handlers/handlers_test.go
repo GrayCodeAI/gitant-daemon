@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -738,8 +739,23 @@ func TestDelegateCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Create a UCAN with the capabilities we want to delegate
+	caps := []identity.Capability{
+		{Resource: "repo:test", Actions: []string{"read", "write"}},
+	}
+	ucan := identity.NewUCAN(id.DID, "did:key:ztest", caps, time.Hour)
+
 	r := chiRouter()
-	r.Post("/{did}/delegate", DelegateCapability(id))
+	r.Route("/{did}", func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ctx := context.WithValue(r.Context(), authMiddleware.IdentityKey, id.DID)
+				ctx = context.WithValue(ctx, authMiddleware.UCANKey, ucan)
+				next.ServeHTTP(w, r.WithContext(ctx))
+			})
+		})
+		r.Post("/delegate", DelegateCapability(id))
+	})
 
 	body := `{"audience":"did:key:ztest","resource":"repo:test","actions":["read","write"]}`
 	req := httptest.NewRequest("POST", "/did:key:ztest/delegate", bytes.NewBufferString(body))

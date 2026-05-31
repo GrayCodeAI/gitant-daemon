@@ -10,19 +10,25 @@ const (
 	compactOpLimit  = 1000
 )
 
+// LogProvider supplies operation logs for compaction.
+type LogProvider interface {
+	Logs() []*OperationLog
+}
+
 // Compactor periodically compacts operation logs to bound memory usage.
 type Compactor struct {
-	stop chan struct{}
+	providers []LogProvider
+	stop      chan struct{}
 }
 
 // IssueLogProvider adapts IssueStore for the compactor.
 type IssueLogProvider struct {
-	store *IssueStore
+	Store *IssueStore
 }
 
-// AllIssueLogs returns all issue operation logs.
-func (p *IssueLogProvider) AllIssueLogs() []*OperationLog {
-	all := p.store.All()
+// Logs returns all issue operation logs.
+func (p *IssueLogProvider) Logs() []*OperationLog {
+	all := p.Store.All()
 	var logs []*OperationLog
 	for _, repoIssues := range all {
 		for _, issue := range repoIssues {
@@ -32,20 +38,14 @@ func (p *IssueLogProvider) AllIssueLogs() []*OperationLog {
 	return logs
 }
 
-// AllPRLogs returns nil (not applicable).
-func (p *IssueLogProvider) AllPRLogs() []*OperationLog { return nil }
-
 // PRLogProvider adapts PullRequestStore for the compactor.
 type PRLogProvider struct {
-	store *PullRequestStore
+	Store *PullRequestStore
 }
 
-// AllIssueLogs returns nil (not applicable).
-func (p *PRLogProvider) AllIssueLogs() []*OperationLog { return nil }
-
-// AllPRLogs returns all PR operation logs.
-func (p *PRLogProvider) AllPRLogs() []*OperationLog {
-	all := p.store.All()
+// Logs returns all PR operation logs.
+func (p *PRLogProvider) Logs() []*OperationLog {
+	all := p.Store.All()
 	var logs []*OperationLog
 	for _, repoPRs := range all {
 		for _, pr := range repoPRs {
@@ -55,10 +55,42 @@ func (p *PRLogProvider) AllPRLogs() []*OperationLog {
 	return logs
 }
 
+// TaskLogProvider adapts TaskStore for the compactor.
+type TaskLogProvider struct {
+	Store *TaskStore
+}
+
+// Logs returns all task operation logs.
+func (p *TaskLogProvider) Logs() []*OperationLog {
+	// TaskStore does not expose an All() method yet; return nil for now.
+	return nil
+}
+
+// LabelLogProvider adapts LabelStore for the compactor.
+type LabelLogProvider struct {
+	Store *LabelStore
+}
+
+// Logs returns all label operation logs.
+func (p *LabelLogProvider) Logs() []*OperationLog {
+	return nil
+}
+
+// ReleaseLogProvider adapts ReleaseStore for the compactor.
+type ReleaseLogProvider struct {
+	Store *ReleaseStore
+}
+
+// Logs returns all release operation logs.
+func (p *ReleaseLogProvider) Logs() []*OperationLog {
+	return nil
+}
+
 // NewCompactor creates a compactor with the given log providers.
-func NewCompactor() *Compactor {
+func NewCompactor(providers ...LogProvider) *Compactor {
 	return &Compactor{
-		stop: make(chan struct{}),
+		providers: providers,
+		stop:      make(chan struct{}),
 	}
 }
 
@@ -88,8 +120,15 @@ func (c *Compactor) Stop() {
 
 // CompactAll compacts all operation logs from all registered providers.
 func (c *Compactor) CompactAll() {
-	// CompactAll is a no-op when no providers are registered.
-	// Providers are registered via the server wiring.
+	totalCompacted := 0
+	for _, p := range c.providers {
+		for _, log := range p.Logs() {
+			totalCompacted += CompactLog(log)
+		}
+	}
+	if totalCompacted > 0 {
+		slog.Info("CRDT compaction complete", "operations_removed", totalCompacted)
+	}
 }
 
 // CompactLog compacts a single operation log if it exceeds the threshold.

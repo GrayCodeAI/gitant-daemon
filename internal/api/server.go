@@ -95,7 +95,7 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 		releases:    releases,
 		protection:  protection,
 		revocations: revocations,
-		nonces:      identity.NewNonceCache(0), // default 10min TTL
+		nonces:      identity.NewNonceCache(0, dataDir), // default 10min TTL, persisted
 		rateLimiter: authMiddleware.NewRateLimiter(100), // 100 req/min
 		corsOrigins: corsOrigins,
 		startTime:   time.Now(),
@@ -113,6 +113,11 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 	// Load persisted agent registry
 	if err := s.agents.Load(); err != nil {
 		slog.Warn("failed to load agent registry", "error", err)
+	}
+
+	// Load persisted nonce cache (replay protection)
+	if err := s.nonces.Load(); err != nil {
+		slog.Warn("failed to load nonce cache", "error", err)
 	}
 
 	return s
@@ -400,6 +405,7 @@ func (s *Server) setupRoutes() {
 			r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs, s.repos, s.protection, s.webhooks))
 			r.Post("/{id}/branches", handlers.CreateBranch(s.repos))
 			r.Post("/{id}/labels", handlers.CreateLabel(s.labels, s.webhooks))
+			r.Put("/{id}/labels/{name}", handlers.UpdateLabelColor(s.labels, s.webhooks))
 			r.Delete("/{id}/labels/{name}", handlers.DeleteLabel(s.labels, s.webhooks))
 			r.Put("/{id}/protections/{branch}", handlers.SetProtection(s.protection))
 			r.Delete("/{id}/protections/{branch}", handlers.RemoveProtection(s.protection))
@@ -686,7 +692,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	save("releases", s.releases.Save)
 	save("protections", s.protection.Save)
 	save("webhooks", s.webhooks.Save)
+
+	// Clean up expired revocations (older than 48h) before persisting
+	if removed := s.revocations.Cleanup(48 * time.Hour); removed > 0 {
+		slog.Info("cleaned up expired revocations", "removed", removed)
+	}
 	save("revocations", s.revocations.Save)
+	save("nonce_cache", s.nonces.Save)
 	save("agents", s.agents.Save)
 
 	if s.network != nil {

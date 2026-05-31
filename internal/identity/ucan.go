@@ -133,15 +133,22 @@ func DecodeUCAN(encoded string) (*UCAN, error) {
 	return &ucan, nil
 }
 
-// Validate validates the UCAN
+// clockSkewTolerance is the maximum allowed difference between issuer and verifier
+// clocks. Without this, valid tokens can be rejected or expired tokens accepted
+// when clocks are slightly out of sync.
+const clockSkewTolerance = 30 * time.Second
+
+// Validate validates the UCAN with clock skew tolerance.
+// Tokens are accepted if they are within clockSkewTolerance of the validity window.
 func (u *UCAN) Validate() error {
 	now := time.Now().Unix()
+	tolerance := int64(clockSkewTolerance.Seconds())
 
-	if u.NotBefore > now {
+	if u.NotBefore > now+tolerance {
 		return fmt.Errorf("UCAN is not yet valid")
 	}
 
-	if u.Expires < now {
+	if u.Expires < now-tolerance {
 		return fmt.Errorf("UCAN has expired")
 	}
 

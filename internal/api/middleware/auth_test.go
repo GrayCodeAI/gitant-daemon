@@ -51,6 +51,8 @@ func TestRequireCapability_NoUCAN(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)
+	ctx := context.WithValue(req.Context(), IdentityKey, "did:key:zuser")
+	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -72,7 +74,8 @@ func TestRequireCapability_WithMatchingUCAN(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)
-	ctx := context.WithValue(req.Context(), UCANKey, ucan)
+	ctx := context.WithValue(req.Context(), IdentityKey, "did:key:zissuer")
+	ctx = context.WithValue(ctx, UCANKey, ucan)
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -95,7 +98,8 @@ func TestRequireCapability_WithNonMatchingUCAN(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)
-	ctx := context.WithValue(req.Context(), UCANKey, ucan)
+	ctx := context.WithValue(req.Context(), IdentityKey, "did:key:zissuer")
+	ctx = context.WithValue(ctx, UCANKey, ucan)
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -202,7 +206,7 @@ func TestNewHTTPSignatureMiddleware_WrongAudience(t *testing.T) {
 	}
 }
 
-func TestNewHTTPSignatureMiddleware_WildcardAudience(t *testing.T) {
+func TestNewHTTPSignatureMiddleware_WildcardAudienceRejected(t *testing.T) {
 	issuer, err := identity.NewIdentity()
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +221,8 @@ func TestNewHTTPSignatureMiddleware_WildcardAudience(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Create UCAN with wildcard audience
+	// Create UCAN with wildcard audience — should be rejected as it weakens
+	// the audience-binding security property
 	ucan := identity.NewUCAN(issuer.DID, "*", []identity.Capability{
 		{Resource: "repo:test", Actions: []string{"read"}},
 	}, 1*time.Hour)
@@ -231,8 +236,8 @@ func TestNewHTTPSignatureMiddleware_WildcardAudience(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 (wildcard audience rejected), got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -261,7 +266,7 @@ func TestNewHTTPSignatureMiddleware_RevokedUCAN(t *testing.T) {
 	}
 
 	// Revoke the UCAN by nonce
-	revocations.Revoke(ucan.Nonce)
+	revocations.Revoke(ucan.Nonce, "test")
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -324,7 +329,7 @@ func TestGetUCAN_Nil(t *testing.T) {
 	}
 }
 
-func TestRequireRepoWriteCapability_AllowsOperator(t *testing.T) {
+func TestRequireRepoWriteCapability_RejectsOperatorWithoutUCAN(t *testing.T) {
 	r := chi.NewRouter()
 	r.Route("/repos/{id}", func(r chi.Router) {
 		r.Use(RequireRepoWriteCapability("id"))
@@ -333,14 +338,15 @@ func TestRequireRepoWriteCapability_AllowsOperator(t *testing.T) {
 		}))
 	})
 
+	// HTTP Signature operator without UCAN should be rejected
 	req := httptest.NewRequest("POST", "/repos/my-repo/issues", nil)
 	ctx := context.WithValue(req.Context(), IdentityKey, "did:key:zoperator")
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 (UCAN required), got %d", rec.Code)
 	}
 }
 
@@ -361,7 +367,8 @@ func TestRequireRepoWriteCapability_DeniesReadOnlyUCAN(t *testing.T) {
 	})
 
 	req := httptest.NewRequest("POST", "/repos/my-repo/issues", nil)
-	ctx := context.WithValue(req.Context(), UCANKey, ucan)
+	ctx := context.WithValue(req.Context(), IdentityKey, "did:key:zagent")
+	ctx = context.WithValue(ctx, UCANKey, ucan)
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)

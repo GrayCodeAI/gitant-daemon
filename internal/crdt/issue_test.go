@@ -169,3 +169,101 @@ func TestPullRequestMerge(t *testing.T) {
 		t.Fatal("expected title to be from pr1")
 	}
 }
+
+func TestTaskStoreMergeRemote(t *testing.T) {
+	store1 := NewTaskStore("")
+
+	// Create task on store1
+	task := store1.Create("repo-1", "task-1", "did:key:z123", "Fix bug", "Fix the login bug")
+
+	// Simulate remote task that has been claimed
+	remote := &Task{
+		ID: "task-1", RepoID: "repo-1", Title: "Fix bug", Description: "Fix the login bug",
+		Status: TaskClaimed, ClaimedBy: "did:key:z456", CreatedBy: "did:key:z123",
+		log: NewOperationLog(),
+	}
+	remote.log.Add(&Operation{ID: "op-create", Type: OpCreate, Author: "did:key:z123", Data: map[string]interface{}{"title": "Fix bug"}})
+	remote.log.Add(&Operation{ID: "op-claim", Type: OpClaimTask, Author: "did:key:z456", Data: map[string]interface{}{"claimed_by": "did:key:z456"}})
+
+	store1.MergeRemote("repo-1", remote)
+
+	merged, err := store1.Get("repo-1", task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.ClaimedBy != "did:key:z456" {
+		t.Fatalf("expected claimed by 'did:key:z456', got '%s'", merged.ClaimedBy)
+	}
+}
+
+func TestLabelMerge(t *testing.T) {
+	label1 := &Label{Name: "bug", Color: "#ff0000", log: NewOperationLog()}
+	label2 := &Label{Name: "bug", Color: "#00ff00", log: NewOperationLog()}
+
+	label1.SetColor("did:key:z123", "#ff0000")
+	label2.SetColor("did:key:z456", "#00ff00")
+
+	label1.Merge(label2)
+
+	// After merge, one color should win (deterministic)
+	if label1.Color == "" {
+		t.Fatal("expected label to have a color after merge")
+	}
+}
+
+func TestLabelMergeTombstone(t *testing.T) {
+	label1 := &Label{Name: "bug", Color: "#ff0000", log: NewOperationLog()}
+	label2 := &Label{Name: "bug", Color: "#ff0000", log: NewOperationLog()}
+
+	label2.Tombstone("did:key:z456")
+	label1.SetColor("did:key:z123", "#00ff00")
+
+	label1.Merge(label2)
+
+	if !label1.Tombstoned {
+		t.Fatal("expected label to be tombstoned after merge")
+	}
+}
+
+func TestReleaseStoreMergeRemote(t *testing.T) {
+	store1 := NewReleaseStore("")
+
+	// Create release on store1
+	rel1, err := store1.Create("repo-1", "v1.0.0", "Release 1.0", "Initial release", "did:key:z123")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create same release with tombstone operation
+	rel2 := &Release{ID: rel1.ID, RepoID: "repo-1", Tag: "v1.0.0", Title: "Release 1.0", Author: "did:key:z123", log: NewOperationLog()}
+	rel2.log.Add(&Operation{ID: "op-create", Type: OpCreate, Author: "did:key:z123"})
+	rel2.Tombstone("did:key:z456")
+
+	// Merge tombstone from remote into store1
+	store1.MergeRemote("repo-1", rel2)
+
+	// The release should be tombstoned (filtered from List)
+	releases := store1.List("repo-1")
+	if len(releases) != 0 {
+		t.Fatalf("expected 0 releases after tombstone merge, got %d", len(releases))
+	}
+}
+
+func TestReleaseMergeTitleAndBody(t *testing.T) {
+	rel1 := &Release{ID: "rel-1", RepoID: "repo-1", Tag: "v1.0.0", Title: "Release 1.0", Body: "Initial", Author: "did:key:z123", log: NewOperationLog()}
+	rel2 := &Release{ID: "rel-1", RepoID: "repo-1", Tag: "v1.0.0", Title: "Release 1.0", Body: "Initial", Author: "did:key:z123", log: NewOperationLog()}
+
+	// Add operations directly (SetTitle/SetBody are applied during merge replay)
+	rel1.log.Add(&Operation{ID: "op-title", Type: OpSetTitle, Author: "did:key:z123", Data: map[string]interface{}{"title": "Release 1.0.0"}})
+	rel2.log.Add(&Operation{ID: "op-body", Type: OpSetBody, Author: "did:key:z456", Data: map[string]interface{}{"body": "Updated notes"}})
+
+	rel1.Merge(rel2)
+
+	// Both changes should be applied during merge replay
+	if rel1.Title != "Release 1.0.0" {
+		t.Fatalf("expected title 'Release 1.0.0', got '%s'", rel1.Title)
+	}
+	if rel1.Body != "Updated notes" {
+		t.Fatalf("expected body 'Updated notes', got '%s'", rel1.Body)
+	}
+}

@@ -13,51 +13,68 @@ import (
 
 // Release represents a CRDT release
 type Release struct {
-	ID        string    `json:"id"`
-	RepoID    string    `json:"repo_id"`
-	Tag       string    `json:"tag"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
-	Author    string    `json:"author"` // DID
-	CreatedAt time.Time `json:"created_at"`
-	log       *OperationLog
+	ID         string    `json:"id"`
+	RepoID     string    `json:"repo_id"`
+	Tag        string    `json:"tag"`
+	Title      string    `json:"title"`
+	Body       string    `json:"body"`
+	Author     string    `json:"author"` // DID
+	CreatedAt  time.Time `json:"created_at"`
+	Tombstoned bool      `json:"tombstoned,omitempty"`
+	log        *OperationLog
+}
+
+// Tombstone marks a release as deleted. The tombstone operation will replicate
+// to peers, ensuring the deletion propagates correctly.
+func (r *Release) Tombstone(author string) {
+	r.Tombstoned = true
+	r.log.Add(&Operation{
+		ID:        generateID(),
+		Type:      OpTombstone,
+		Author:    author,
+		Timestamp: time.Now(),
+		Lamport:   r.log.clock.Increment(),
+	})
 }
 
 // MarshalJSON serializes a Release including its operation log
 func (r *Release) MarshalJSON() ([]byte, error) {
 	type releaseJSON struct {
-		ID        string       `json:"id"`
-		RepoID    string       `json:"repo_id"`
-		Tag       string       `json:"tag"`
-		Title     string       `json:"title"`
-		Body      string       `json:"body"`
-		Author    string       `json:"author"`
-		CreatedAt time.Time    `json:"created_at"`
-		Log       []*Operation `json:"log,omitempty"`
+		ID         string       `json:"id"`
+		RepoID     string       `json:"repo_id"`
+		Tag        string       `json:"tag"`
+		Title      string       `json:"title"`
+		Body       string       `json:"body"`
+		Author     string       `json:"author"`
+		CreatedAt  time.Time    `json:"created_at"`
+		Tombstoned bool         `json:"tombstoned,omitempty"`
+		Log        []*Operation `json:"log,omitempty"`
 	}
 	return json.Marshal(releaseJSON{
-		ID:        r.ID,
-		RepoID:    r.RepoID,
-		Tag:       r.Tag,
-		Title:     r.Title,
-		Body:      r.Body,
-		Author:    r.Author,
-		CreatedAt: r.CreatedAt,
-		Log:       r.log.Operations(),
+		ID:         r.ID,
+		RepoID:     r.RepoID,
+		Tag:        r.Tag,
+		Title:      r.Title,
+		Body:       r.Body,
+		Author:     r.Author,
+		CreatedAt:  r.CreatedAt,
+		Tombstoned: r.Tombstoned,
+		Log:        r.log.Operations(),
 	})
 }
 
 // UnmarshalJSON deserializes a Release and rebuilds its operation log
 func (r *Release) UnmarshalJSON(data []byte) error {
 	type releaseJSON struct {
-		ID        string       `json:"id"`
-		RepoID    string       `json:"repo_id"`
-		Tag       string       `json:"tag"`
-		Title     string       `json:"title"`
-		Body      string       `json:"body"`
-		Author    string       `json:"author"`
-		CreatedAt time.Time    `json:"created_at"`
-		Log       []*Operation `json:"log,omitempty"`
+		ID         string       `json:"id"`
+		RepoID     string       `json:"repo_id"`
+		Tag        string       `json:"tag"`
+		Title      string       `json:"title"`
+		Body       string       `json:"body"`
+		Author     string       `json:"author"`
+		CreatedAt  time.Time    `json:"created_at"`
+		Tombstoned bool         `json:"tombstoned,omitempty"`
+		Log        []*Operation `json:"log,omitempty"`
 	}
 	var snap releaseJSON
 	if err := json.Unmarshal(data, &snap); err != nil {
@@ -70,6 +87,7 @@ func (r *Release) UnmarshalJSON(data []byte) error {
 	r.Body = snap.Body
 	r.Author = snap.Author
 	r.CreatedAt = snap.CreatedAt
+	r.Tombstoned = snap.Tombstoned
 	r.log = NewOperationLog()
 	for _, op := range snap.Log {
 		r.log.Add(op)
@@ -87,7 +105,6 @@ type ReleaseStore struct {
 	mu       sync.RWMutex
 	releases map[string]map[string]*Release // repoID -> releaseID -> release
 	path     string
-	counter  uint64
 }
 
 // NewReleaseStore creates a new release store
@@ -133,12 +150,6 @@ func (s *ReleaseStore) saveLocked() error {
 	return persistence.SaveJSON(s.path, s.releases)
 }
 
-// nextLamport returns the next Lamport timestamp
-func (s *ReleaseStore) nextLamport() uint64 {
-	s.counter++
-	return s.counter
-}
-
 // Create creates a new release
 func (s *ReleaseStore) Create(repoID, tag, title, body, author string) (*Release, error) {
 	s.mu.Lock()
@@ -176,7 +187,7 @@ func (s *ReleaseStore) Create(repoID, tag, title, body, author string) (*Release
 		Type:      OpCreate,
 		Author:    author,
 		Timestamp: now,
-		Lamport:   s.nextLamport(),
+		Lamport:   release.log.clock.Increment(),
 		Data: map[string]interface{}{
 			"tag":   tag,
 			"title": title,
@@ -190,7 +201,7 @@ func (s *ReleaseStore) Create(repoID, tag, title, body, author string) (*Release
 	return &copy, nil
 }
 
-// Get returns a specific release
+// Get returns a specific non-tombstoned release
 func (s *ReleaseStore) Get(repoID, releaseID string) (*Release, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -198,14 +209,15 @@ func (s *ReleaseStore) Get(repoID, releaseID string) (*Release, error) {
 	if _, ok := s.releases[repoID]; !ok {
 		return nil, fmt.Errorf("repo not found: %s", repoID)
 	}
-	if release, ok := s.releases[repoID][releaseID]; ok {
-		copy := *release
-		return &copy, nil
+	release, ok := s.releases[repoID][releaseID]
+	if !ok || release.Tombstoned {
+		return nil, fmt.Errorf("release not found: %s", releaseID)
 	}
-	return nil, fmt.Errorf("release not found: %s", releaseID)
+	copy := *release
+	return &copy, nil
 }
 
-// List returns all releases for a repository, sorted by created_at descending
+// List returns all non-tombstoned releases for a repository, sorted by created_at descending
 func (s *ReleaseStore) List(repoID string) []*Release {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -216,6 +228,9 @@ func (s *ReleaseStore) List(repoID string) []*Release {
 	}
 
 	for _, release := range s.releases[repoID] {
+		if release.Tombstoned {
+			continue
+		}
 		copy := *release
 		result = append(result, &copy)
 	}
@@ -228,7 +243,7 @@ func (s *ReleaseStore) List(repoID string) []*Release {
 	return result
 }
 
-// Delete removes a release
+// Delete tombstones a release so the deletion replicates to peers.
 func (s *ReleaseStore) Delete(repoID, releaseID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -236,11 +251,12 @@ func (s *ReleaseStore) Delete(repoID, releaseID string) error {
 	if _, ok := s.releases[repoID]; !ok {
 		return fmt.Errorf("repo not found: %s", repoID)
 	}
-	if _, ok := s.releases[repoID][releaseID]; !ok {
+	release, ok := s.releases[repoID][releaseID]
+	if !ok {
 		return fmt.Errorf("release not found: %s", releaseID)
 	}
 
-	delete(s.releases[repoID], releaseID)
+	release.Tombstone("system")
 	return s.saveLocked()
 }
 
@@ -260,14 +276,9 @@ func (r *Release) Merge(other *Release) {
 
 	allOps := make([]*Operation, len(r.log.Operations()))
 	copy(allOps, r.log.Operations())
-	sort.Slice(allOps, func(a, b int) bool {
-		if allOps[a].Lamport != allOps[b].Lamport {
-			return allOps[a].Lamport < allOps[b].Lamport
-		}
-		return allOps[a].Timestamp.Before(allOps[b].Timestamp)
-	})
+	SortOps(allOps)
 
-	// Replay title/body from ops
+	// Replay title/body from ops, and check for tombstone
 	for _, op := range allOps {
 		switch op.Type {
 		case OpSetTitle:
@@ -278,6 +289,8 @@ func (r *Release) Merge(other *Release) {
 			if body, ok := op.Data["body"].(string); ok {
 				r.Body = body
 			}
+		case OpTombstone:
+			r.Tombstoned = true
 		}
 	}
 }

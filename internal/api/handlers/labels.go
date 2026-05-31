@@ -77,6 +77,54 @@ func CreateLabel(store *crdt.LabelStore, wm *webhooks.Manager) http.HandlerFunc 
 	}
 }
 
+// UpdateLabelColor updates the color of an existing label
+func UpdateLabelColor(store *crdt.LabelStore, wm *webhooks.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoID := chi.URLParam(r, "id")
+		name := chi.URLParam(r, "name")
+
+		var req struct {
+			Color string `json:"color"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if req.Color == "" {
+			http.Error(w, "color is required", http.StatusBadRequest)
+			return
+		}
+
+		author := authMiddleware.GetIdentity(r)
+		if author == "" {
+			author = "anonymous"
+		}
+
+		if err := store.SetColor(repoID, name, req.Color, author); err != nil {
+			http.Error(w, SanitizeError(err, "label not found"), http.StatusNotFound)
+			return
+		}
+
+		wm.Dispatch(webhooks.Event{
+			Type: webhooks.EventLabelCreated, // closest event type
+			Repo: repoID,
+			Data: map[string]interface{}{
+				"label":  name,
+				"color":  req.Color,
+				"author": author,
+			},
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"name":  name,
+			"color": req.Color,
+		})
+	}
+}
+
 // DeleteLabel deletes a label from a repository
 func DeleteLabel(store *crdt.LabelStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

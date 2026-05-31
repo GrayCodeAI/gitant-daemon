@@ -83,6 +83,10 @@ var serveCmd = &cobra.Command{
 		}
 		slog.Info("identity loaded", "did", id.DID)
 
+		// Set the node ID for CRDT tiebreaking — ensures concurrent operations
+		// from different peers are deterministically ordered
+		crdt.SetNodeID(id.DID)
+
 		// Create repository registry
 		reposDir := filepath.Join(dataDir, "repos")
 		dataStoreDir := filepath.Join(dataDir, "data")
@@ -142,8 +146,11 @@ var serveCmd = &cobra.Command{
 			slog.Warn("failed to load revocations", "error", err)
 		}
 
-		// Start CRDT operation log compactor
-		compactor := crdt.NewCompactor()
+		// Start CRDT operation log compactor with all store providers
+		compactor := crdt.NewCompactor(
+			&crdt.IssueLogProvider{Store: issueStore},
+			&crdt.PRLogProvider{Store: prStore},
+		)
 		compactor.Start(0) // use default 6h interval
 		defer compactor.Stop()
 
@@ -527,6 +534,7 @@ func init() {
 	rootCmd.AddCommand(cloneCmd)
 	rootCmd.AddCommand(backupCmd)
 	rootCmd.AddCommand(restoreCmd)
+	rootCmd.AddCommand(rotateKeyCmd)
 
 	backupCmd.Flags().StringP("output", "o", "", "Backup output directory (required)")
 	backupCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")
@@ -535,6 +543,54 @@ func init() {
 	restoreCmd.Flags().StringP("input", "i", "", "Backup directory to restore from (required)")
 	restoreCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")
 	restoreCmd.MarkFlagRequired("input")
+
+	rotateKeyCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")
+}
+
+var rotateKeyCmd = &cobra.Command{
+	Use:   "rotate-key",
+	Short: "Rotate the server's Ed25519 identity key",
+	Long:  "Generate a new Ed25519 keypair, archiving the old key for signature verification. The old key is retained in key history so previously-signed tokens remain valid.",
+	Run: func(cmd *cobra.Command, args []string) {
+		dataDir, _ := cmd.Flags().GetString("data-dir")
+		if dataDir == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			dataDir = filepath.Join(home, ".gitant")
+		}
+
+		identityPath := filepath.Join(dataDir, "identity.key")
+
+		// Load existing identity
+		id, err := identity.LoadIdentity(identityPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading identity: %v\n", err)
+			os.Exit(1)
+		}
+
+		oldDID := id.DID
+
+		// Rotate the key
+		if err := id.Rotate(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error rotating key: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Save the new identity (includes key history)
+		if err := id.Save(identityPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving identity: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Key rotated successfully.\n")
+		fmt.Printf("  Old DID: %s\n", oldDID)
+		fmt.Printf("  New DID: %s\n", id.DID)
+		fmt.Printf("  Previous keys preserved: %d\n", len(id.PreviousKeys))
+		fmt.Printf("\nRestart the daemon to use the new key.\n")
+	},
 }
 
 func main() {

@@ -15,18 +15,27 @@ import (
 type contextKey string
 
 const (
-	IdentityKey contextKey = "identity"
+	IdentityKey  contextKey = "identity"
 	SignatureKey contextKey = "signature"
 	UCANKey      contextKey = "ucan"
+	// AuthAttemptedKey is set when the auth middleware has run, even if no
+	// credentials were provided. Downstream middleware can distinguish
+	// "no auth header" from "auth middleware not applied".
+	AuthAttemptedKey contextKey = "auth_attempted"
 )
 
 // NewHTTPSignatureMiddleware creates auth middleware with revocation, replay protection, and audience checking.
 func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, nonces *identity.NonceCache, serverDID string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Mark that auth middleware has been applied, even for unauthenticated
+			// requests. This lets downstream middleware distinguish "no credentials"
+			// from "auth middleware not applied to this route".
+			ctx := context.WithValue(r.Context(), AuthAttemptedKey, true)
+
 			auth := r.Header.Get("Authorization")
 			if auth == "" {
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
@@ -39,13 +48,14 @@ func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, nonces *i
 					return
 				}
 
-				// Validate audience matches this server (or wildcard)
-				if serverDID != "" && ucan.Audience != serverDID && ucan.Audience != "*" {
+				// Validate audience matches this server — wildcard audience is rejected
+				// as it weakens the audience-binding security property
+				if serverDID != "" && ucan.Audience != serverDID {
 					http.Error(w, "UCAN audience does not match this server", http.StatusForbidden)
 					return
 				}
 
-				ctx := context.WithValue(r.Context(), IdentityKey, ucan.Issuer)
+				ctx = context.WithValue(ctx, IdentityKey, ucan.Issuer)
 				ctx = context.WithValue(ctx, UCANKey, ucan)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -87,7 +97,7 @@ func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, nonces *i
 				return
 			}
 
-			pubKey, err := extractPublicKey(keyId)
+			pubKey, err := identity.ExtractPublicKeyFromDID(keyId)
 			if err != nil {
 				http.Error(w, "Invalid authentication key", http.StatusBadRequest)
 				return
@@ -98,7 +108,7 @@ func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, nonces *i
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), IdentityKey, keyId)
+			ctx = context.WithValue(ctx, IdentityKey, keyId)
 			ctx = context.WithValue(ctx, SignatureKey, params)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -118,17 +128,19 @@ func RequireIdentity(next http.Handler) http.Handler {
 }
 
 // RequireCapability returns middleware that checks for a specific UCAN capability.
-// HTTP-signature authenticated operators (no UCAN) are allowed through.
+// All authenticated requests (both UCAN Bearer and HTTP Signature) must present a
+// valid UCAN with the required capability. HTTP Signature alone is not sufficient
+// for capability-gated endpoints — the caller must also hold a UCAN delegation.
 func RequireCapability(resource, action string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if GetIdentity(r) == "" {
+				http.Error(w, "Authentication required", http.StatusUnauthorized)
+				return
+			}
 			ucan := GetUCAN(r)
 			if ucan == nil {
-				if GetIdentity(r) != "" {
-					next.ServeHTTP(w, r)
-					return
-				}
-				http.Error(w, "Insufficient capabilities", http.StatusForbidden)
+				http.Error(w, "UCAN capability token required for this operation", http.StatusForbidden)
 				return
 			}
 			if !ucan.HasCapability(resource, action) {
@@ -140,8 +152,9 @@ func RequireCapability(resource, action string) func(http.Handler) http.Handler 
 	}
 }
 
-// RequireRepoWriteCapability enforces repo:{id} write for UCAN-authenticated agents.
-// HTTP-signature operators (no UCAN in context) pass through unchanged.
+// RequireRepoWriteCapability enforces repo:{id} write for all authenticated requests.
+// Both UCAN Bearer and HTTP Signature callers must present a valid UCAN with the
+// required repo write capability.
 func RequireRepoWriteCapability(paramName string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +174,13 @@ func GetIdentity(r *http.Request) string {
 		return did
 	}
 	return ""
+}
+
+// AuthAttempted returns true if the auth middleware has been applied to this request,
+// even if no credentials were provided.
+func AuthAttempted(r *http.Request) bool {
+	v, _ := r.Context().Value(AuthAttemptedKey).(bool)
+	return v
 }
 
 // GetUCAN extracts the verified UCAN from the request context
@@ -219,24 +239,4 @@ func buildSigningString(r *http.Request, params map[string]string) (string, erro
 	return strings.Join(parts, "\n"), nil
 }
 
-// extractPublicKey extracts the public key from a DID:key
-func extractPublicKey(did string) (ed25519.PublicKey, error) {
-	if !strings.HasPrefix(did, "did:key:z") {
-		return nil, fmt.Errorf("invalid DID format: %s", did)
-	}
 
-	// Remove "did:key:z" prefix
-	encoded := strings.TrimPrefix(did, "did:key:z")
-
-	// Decode base64
-	pubKey, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, fmt.Errorf("decoding public key: %w", err)
-	}
-
-	if len(pubKey) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("invalid public key size: %d", len(pubKey))
-	}
-
-	return ed25519.PublicKey(pubKey), nil
-}

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 
@@ -141,12 +140,7 @@ func (t *Task) Merge(other *Task) {
 
 	allOps := make([]*Operation, len(t.log.Operations()))
 	copy(allOps, t.log.Operations())
-	sort.Slice(allOps, func(a, b int) bool {
-		if allOps[a].Lamport != allOps[b].Lamport {
-			return allOps[a].Lamport < allOps[b].Lamport
-		}
-		return allOps[a].Timestamp.Before(allOps[b].Timestamp)
-	})
+	SortOps(allOps)
 
 	// Reset and replay
 	t.Status = TaskOpen

@@ -205,7 +205,7 @@ $GITLAWB ERC-20 on Base L2.
 
 ### 8.1 MCP Tools
 
-Every node exposes 160+ MCP tools via `gt mcp serve`.
+Every node exposes 154 MCP tools via `gt mcp serve`.
 
 ### 8.2 Task Delegation
 

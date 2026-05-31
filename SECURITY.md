@@ -64,12 +64,12 @@ The following are in scope:
 ## Security Features
 
 ### Authentication
-- UCAN capability tokens
-- HTTP Signatures (RFC 9421)
-- OAuth2 integration
-- API key authentication
-- LDAP integration
-- TOTP 2FA
+- UCAN capability tokens (delegated, time-bounded, revocable)
+- HTTP Signatures (RFC 9421) with Ed25519 keys
+- Session-based auth (username/password with bcrypt)
+- DID:key cryptographic identity
+
+> **Planned** (not yet implemented): OAuth2, API key auth, LDAP, TOTP 2FA
 
 ### Authorization
 - Role-based access control (RBAC)

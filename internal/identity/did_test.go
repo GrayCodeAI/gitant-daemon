@@ -149,3 +149,96 @@ func TestUCAN(t *testing.T) {
 		t.Fatal("expected not to have admin capability")
 	}
 }
+
+func TestKeyRotation(t *testing.T) {
+	id, err := NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalDID := id.DID
+	message := []byte("test message")
+	originalSig := id.Sign(message)
+
+	// Rotate the key
+	if err := id.Rotate(); err != nil {
+		t.Fatal(err)
+	}
+
+	// DID should change
+	if id.DID == originalDID {
+		t.Fatal("expected DID to change after rotation")
+	}
+
+	// Old signature should still verify with history
+	if !id.VerifyWithHistory(message, originalSig) {
+		t.Fatal("expected old signature to verify with key history")
+	}
+
+	// New signature should verify
+	newSig := id.Sign(message)
+	if !id.VerifyWithHistory(message, newSig) {
+		t.Fatal("expected new signature to verify")
+	}
+
+	// AllKnownDIDs should include both
+	dids := id.AllKnownDIDs()
+	if len(dids) != 2 {
+		t.Fatalf("expected 2 DIDs, got %d", len(dids))
+	}
+	if dids[0] != originalDID {
+		t.Fatalf("expected first DID to be original, got %s", dids[0])
+	}
+	if dids[1] != id.DID {
+		t.Fatalf("expected second DID to be current, got %s", dids[1])
+	}
+}
+
+func TestKeyRotationSaveLoad(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "gitant-identity-rotate-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	id, err := NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalDID := id.DID
+	message := []byte("test message")
+	originalSig := id.Sign(message)
+
+	// Rotate and save
+	if err := id.Rotate(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tmpDir, "identity.json")
+	if err := id.Save(path); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load and verify key history is preserved
+	loaded, err := LoadIdentity(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if loaded.DID != id.DID {
+		t.Fatalf("expected DID %s, got %s", id.DID, loaded.DID)
+	}
+
+	if len(loaded.PreviousKeys) != 1 {
+		t.Fatalf("expected 1 previous key, got %d", len(loaded.PreviousKeys))
+	}
+
+	if loaded.PreviousKeys[0].DID != originalDID {
+		t.Fatalf("expected previous DID %s, got %s", originalDID, loaded.PreviousKeys[0].DID)
+	}
+
+	// Old signature should still verify
+	if !loaded.VerifyWithHistory(message, originalSig) {
+		t.Fatal("expected old signature to verify after reload")
+	}
+}

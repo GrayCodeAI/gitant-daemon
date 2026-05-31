@@ -42,7 +42,7 @@
 | Collaboration (issues/PRs/tasks) | **Operational** — CRDT metadata on disk |
 | DID + UCAN + HTTP Signatures | **Implemented** — enforcement gaps being closed |
 | Web dashboard | **Operational locally** — most daemon APIs wired |
-| MCP (64 tools) | **Dev-ready** — GitHub clone + release tarballs |
+| MCP (154 tools) | **Dev-ready** — GitHub clone + release tarballs |
 | P2P / multi-node sync | **Partial** — block exchange + CRDT gossip; bootstrap seeds via env |
 | Multi-user auth | **NEW** — SQLite backend, RBAC, session-based auth |
 | Inline code review | **NEW** — PR review comments with threads |
@@ -83,7 +83,7 @@
 - [x] `push_code` includes `objects[]`
 - [x] `get_daemon_status` tool
 - [x] Node `bin` entry, ESM, shebang
-- [x] README updated (64 tools, env vars)
+- [x] README updated (154 tools, env vars)
 
 ### gitant-cli
 - [x] Standalone developer CLI repo (`GrayCodeAI/gitant-cli`)

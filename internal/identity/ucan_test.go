@@ -161,7 +161,7 @@ func TestRevocationStore(t *testing.T) {
 	}
 
 	// Revoke
-	store.Revoke("nonce1")
+	store.Revoke("nonce1", "test")
 	if !store.IsRevoked("nonce1") {
 		t.Fatal("nonce1 should be revoked")
 	}
@@ -188,8 +188,8 @@ func TestRevocationStorePersistence(t *testing.T) {
 
 	// Create and save
 	store1 := NewRevocationStore(tmpDir)
-	store1.Revoke("abc123")
-	store1.Revoke("def456")
+	store1.Revoke("abc123", "test")
+	store1.Revoke("def456", "test")
 	if err := store1.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestVerifySignedUCANWithChainRevoked(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	store := NewRevocationStore(tmpDir)
-	store.Revoke(ucan.Nonce)
+	store.Revoke(ucan.Nonce, "test")
 
 	// Should fail: UCAN is revoked
 	_, err = VerifySignedUCANWithChain(token, store, nil)
@@ -403,7 +403,7 @@ func TestNonceCacheReplayDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cache := NewNonceCache(5 * time.Second)
+	cache := NewNonceCache(5 * time.Second, "")
 	defer cache.Stop()
 
 	// First use should succeed

@@ -125,9 +125,11 @@ func TestAuthIntegration_WriteAllowedWithWriteUCAN(t *testing.T) {
 	}
 }
 
-func TestAuthIntegration_ServerOperatorBypassesWriteCapability(t *testing.T) {
+func TestAuthIntegration_ServerOperatorRequiresUCANForCapability(t *testing.T) {
 	r, serverID := setupAuthIntegrationRouter(t)
 
+	// HTTP Signature operators must present a UCAN for capability-gated endpoints.
+	// Without a UCAN, the request should be rejected with 403.
 	body := bytes.NewBufferString(`{"title":"operator issue","body":""}`)
 	req := httptest.NewRequest("POST", "/api/v1/repos/public-repo/issues", body)
 	req.Header.Set("Content-Type", "application/json")
@@ -135,7 +137,7 @@ func TestAuthIntegration_ServerOperatorBypassesWriteCapability(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 (UCAN required), got %d: %s", w.Code, w.Body.String())
 	}
 }

@@ -94,12 +94,7 @@ func (l *Label) Merge(other *Label) {
 
 	allOps := make([]*Operation, len(l.log.Operations()))
 	copy(allOps, l.log.Operations())
-	sort.Slice(allOps, func(a, b int) bool {
-		if allOps[a].Lamport != allOps[b].Lamport {
-			return allOps[a].Lamport < allOps[b].Lamport
-		}
-		return allOps[a].Timestamp.Before(allOps[b].Timestamp)
-	})
+	SortOps(allOps)
 
 	// Reset and replay
 	l.Tombstoned = false
@@ -248,6 +243,24 @@ func (s *LabelStore) Remove(repoID, name, author string) error {
 	}
 
 	label.Tombstone(author)
+	return s.saveLocked()
+}
+
+// SetColor updates the color of an existing label.
+func (s *LabelStore) SetColor(repoID, name, color, author string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, ok := s.labels[repoID]
+	if !ok {
+		return fmt.Errorf("repo not found: %s", repoID)
+	}
+	label, ok := repo[name]
+	if !ok || label.Tombstoned {
+		return fmt.Errorf("label not found: %s", name)
+	}
+
+	label.SetColor(author, color)
 	return s.saveLocked()
 }
 

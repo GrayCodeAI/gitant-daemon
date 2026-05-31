@@ -2,6 +2,7 @@ package crdt
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 )
 
@@ -49,8 +50,24 @@ type Operation struct {
 	Author    string                 `json:"author"` // DID
 	Timestamp time.Time              `json:"timestamp"`
 	Lamport   uint64                 `json:"lamport"`
+	NodeID    string                 `json:"node_id,omitempty"` // Tiebreaker for concurrent ops
 	Data      map[string]interface{} `json:"data"`
-	Parent    string                 `json:"parent,omitempty"` // Parent operation ID
+}
+
+// nodeID is set once at startup and stamped on every local operation.
+// It provides a deterministic tiebreaker when two operations have the same
+// Lamport timestamp (concurrent edits from different peers).
+var nodeID string
+
+// SetNodeID sets the node identifier used for CRDT tiebreaking.
+// Call this once at startup with the server's DID or a unique identifier.
+func SetNodeID(id string) {
+	nodeID = id
+}
+
+// GetNodeID returns the current node identifier.
+func GetNodeID() string {
+	return nodeID
 }
 
 // LamportClock provides causal ordering
@@ -95,10 +112,13 @@ func NewOperationLog() *OperationLog {
 	}
 }
 
-// Add adds an operation to the log
+// Add adds an operation to the log, stamping the current node ID if not set.
 func (l *OperationLog) Add(op *Operation) {
 	if op.Timestamp.IsZero() {
 		op.Timestamp = time.Now()
+	}
+	if op.NodeID == "" && nodeID != "" {
+		op.NodeID = nodeID
 	}
 	op.Lamport = l.clock.Increment()
 	l.operations = append(l.operations, op)
@@ -125,6 +145,27 @@ func (l *OperationLog) ImportOperation(op *Operation) {
 // Operations returns all operations
 func (l *OperationLog) Operations() []*Operation {
 	return l.operations
+}
+
+// CompareOps provides a deterministic sort order for operations:
+// 1. Lamport timestamp (causal order)
+// 2. NodeID (tiebreaker for concurrent ops from different peers)
+// 3. Wall-clock timestamp (final tiebreaker)
+func CompareOps(a, b *Operation) bool {
+	if a.Lamport != b.Lamport {
+		return a.Lamport < b.Lamport
+	}
+	if a.NodeID != b.NodeID {
+		return a.NodeID < b.NodeID
+	}
+	return a.Timestamp.Before(b.Timestamp)
+}
+
+// SortOps sorts operations in place using CompareOps.
+func SortOps(ops []*Operation) {
+	sort.Slice(ops, func(i, j int) bool {
+		return CompareOps(ops[i], ops[j])
+	})
 }
 
 // MarshalJSON marshals the operation log to JSON
