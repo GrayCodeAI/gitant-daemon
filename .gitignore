@@ -1,20 +1,29 @@
-# Compiled binaries (root-level only)
+# Compiled / generated assets
 /bin/
 /gitant
 /git-remote-gitant
-
-# Build artifacts
+dist/
 .next/
+out/
+build/
 
-# OS files
+# OS / editor junk
 .DS_Store
-
-# IDE
+Thumbs.db
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# Test coverage
+# Test / coverage
 coverage.out
 coverage.html
+coverage/
+
+# Docs / draft artifacts
+!*PLAN.md
+!*PROTOCOL.md
+
+# Env / secrets
+.env*
+!.env.example
