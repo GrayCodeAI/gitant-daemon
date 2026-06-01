@@ -42,8 +42,22 @@ func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, nonces *i
 			// Handle UCAN Bearer tokens
 			if strings.HasPrefix(auth, "Bearer ") {
 				token := strings.TrimPrefix(auth, "Bearer ")
+
+				// Distinguish a UCAN from an opaque session token by shape.
+				// UCANs are structured tokens with dot-separated base64 segments
+				// (header.payload.signature). Opaque session tokens are flat
+				// strings with no dots. If the token is not UCAN-shaped, fall
+				// through so downstream session auth middleware can validate it.
+				if !looksLikeUCAN(token) {
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+
 				ucan, err := identity.VerifySignedUCANWithChain(token, revocations, nonces)
 				if err != nil {
+					// Token is UCAN-shaped but failed verification (bad
+					// signature, expired, or revoked). This is a genuine
+					// authentication failure — reject.
 					http.Error(w, "Invalid or expired authentication token", http.StatusUnauthorized)
 					return
 				}
@@ -116,14 +130,26 @@ func NewHTTPSignatureMiddleware(revocations *identity.RevocationStore, nonces *i
 }
 
 // RequireIdentity is middleware that rejects requests without a valid identity
+// It checks for UCAN/HTTP Signature identity first, then falls back to session-based authentication
 func RequireIdentity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// First check for UCAN/HTTP Signature identity
 		did, ok := r.Context().Value(IdentityKey).(string)
-		if !ok || did == "" {
-			http.Error(w, "Authentication required", http.StatusUnauthorized)
+		if ok && did != "" {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+
+		// Fall back to checking for session-based authentication
+		user := GetUser(r)
+		if user != nil {
+			// For session-based auth, set the identity to the user ID for compatibility
+			ctx := context.WithValue(r.Context(), IdentityKey, user.ID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
 	})
 }
 
@@ -189,6 +215,20 @@ func GetUCAN(r *http.Request) *identity.UCAN {
 		return ucan
 	}
 	return nil
+}
+
+// looksLikeUCAN reports whether a Bearer token has the structural shape of a
+// signed UCAN (base64(payload).base64(signature)) rather than an opaque session
+// token. Session tokens are flat hex strings with no dots, so the presence of a
+// dot-separated two-part structure distinguishes a UCAN. This lets the auth
+// middleware cleanly hand opaque session tokens to the session auth layer while
+// still rejecting malformed/expired/revoked UCANs.
+func looksLikeUCAN(token string) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return false
+	}
+	return parts[0] != "" && parts[1] != ""
 }
 
 // parseSignatureParams parses the Authorization header signature params

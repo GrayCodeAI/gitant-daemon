@@ -11,7 +11,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
+	"github.com/lakshmanpatel/gitant/internal/application/service"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
+	"github.com/lakshmanpatel/gitant/internal/infrastructure/adapters"
+	"github.com/lakshmanpatel/gitant/internal/search"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
@@ -35,11 +38,16 @@ func setupWorkflowRouter(t *testing.T) (*chi.Mux, *storage.RepositoryRegistry, *
 
 	r := chi.NewRouter()
 
-	// Repo CRUD
-	r.Post("/repos", CreateRepo(reg, wm))
-	r.Get("/repos", ListRepos(reg, ""))
-	r.Get("/repos/{id}", GetRepo(reg))
-	r.Delete("/repos/{id}", DeleteRepo(reg, wm))
+	// Create repository service
+	repoAdapter := adapters.NewRepositoryAdapter(reg)
+	factory := service.NewServiceFactory(repoAdapter, nil, nil, nil, nil, nil)
+	repoService := factory.CreateRepositoryService()
+
+	// Repo CRUD (using services)
+	r.Post("/repos", CreateRepo(repoService, wm))
+	r.Get("/repos", ListRepos(repoService, ""))
+	r.Get("/repos/{id}", GetRepo(repoService))
+	r.Delete("/repos/{id}", DeleteRepo(reg, wm)) // DeleteRepo still uses registry (TODO: add to service)
 
 	// Issues
 	r.Post("/repos/{id}/issues", CreateIssue(issueStore, wm))
@@ -87,8 +95,8 @@ func setupWorkflowRouter(t *testing.T) (*chi.Mux, *storage.RepositoryRegistry, *
 	r.Get("/repos/{id}/diff", DiffCommits(reg))
 	r.Get("/repos/{id}/diff/patch", GetDiff(reg))
 
-	// Search
-	r.Get("/repos/{id}/search", SearchCode(reg))
+	// Search (served from the in-memory index, as in production)
+	r.Get("/repos/{id}/search", SearchCodeIndexed(search.New(reg)))
 
 	return r, reg, issueStore, prStore, taskStore, labelStore, protectionStore
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,12 +17,19 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/lakshmanpatel/gitant/internal/api/handlers"
 	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
+	"github.com/lakshmanpatel/gitant/internal/application/ports"
+	"github.com/lakshmanpatel/gitant/internal/application/service"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
+	"github.com/lakshmanpatel/gitant/internal/infrastructure/adapters"
+	"github.com/lakshmanpatel/gitant/internal/discussions"
 	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/lakshmanpatel/gitant/internal/network"
+	"github.com/lakshmanpatel/gitant/internal/projects"
 	"github.com/lakshmanpatel/gitant/internal/runner"
+	"github.com/lakshmanpatel/gitant/internal/search"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/store"
+	"github.com/lakshmanpatel/gitant/internal/wiki"
 	ws "github.com/lakshmanpatel/gitant/internal/websocket"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
@@ -50,33 +58,41 @@ func init() {
 }
 
 type Server struct {
-	router      *chi.Mux
-	httpServer  *http.Server
-	port        int
-	identity    *identity.Identity
-	repos       *storage.RepositoryRegistry
-	issues      *crdt.IssueStore
-	prs         *crdt.PullRequestStore
-	blockstore  *storage.Blockstore
-	agents      *handlers.AgentRegistry
-	webhooks    *webhooks.Manager
-	labels      *crdt.LabelStore
-	tasks       *crdt.TaskStore
-	releases    *crdt.ReleaseStore
-	protection  *storage.ProtectionStore
-	revocations *identity.RevocationStore
-	nonces      *identity.NonceCache
-	rateLimiter *authMiddleware.RateLimiter
-	corsOrigins []string
-	startTime   time.Time
-	network     *network.Node
-	sync        *network.SyncCoordinator
-	pinner      network.ObjectPinner
-	authService *store.AuthService
-	reviewStore store.ReviewCommentStore
-	runner      *runner.Runner
-	wsHub       *ws.Hub
-	dataDir     string
+	router          *chi.Mux
+	httpServer      *http.Server
+	port            int
+	identity        *identity.Identity
+	repos           *storage.RepositoryRegistry
+	issues          *crdt.IssueStore
+	prs             *crdt.PullRequestStore
+	blockstore      *storage.Blockstore
+	agents          *handlers.AgentRegistry
+	webhooks        *webhooks.Manager
+	labels          *crdt.LabelStore
+	tasks           *crdt.TaskStore
+	releases        *crdt.ReleaseStore
+	protection      *storage.ProtectionStore
+	revocations     *identity.RevocationStore
+	nonces          *identity.NonceCache
+	rateLimiter     *authMiddleware.RateLimiter
+	corsOrigins     []string
+	startTime       time.Time
+	network         *network.Node
+	sync            *network.SyncCoordinator
+	pinner          network.ObjectPinner
+	authService     *store.AuthService
+	reviewStore     store.ReviewCommentStore
+	runner          *runner.Runner
+	wsHub           *ws.Hub
+	dataDir         string
+	discussionStore *discussions.Store
+	projectStore    *projects.Store
+	wikiStore       *wiki.Store
+	searchIndex     *search.Index
+
+	// Service layer (dependency injection)
+	serviceFactory  *service.ServiceFactory
+	repoService     ports.RepositoryService
 }
 
 func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string, corsOrigins []string) *Server {
@@ -103,6 +119,41 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 		wsHub:       ws.NewHubWithOrigins(corsOrigins),
 		dataDir:     dataDir,
 	}
+
+	// Initialize discussions, projects, and wiki stores.
+	// Each store's NewStore takes the data DIRECTORY and appends its own
+	// filename (discussions.json / projects.json / wiki.json) internally.
+	s.discussionStore = discussions.NewStore(dataDir)
+	s.projectStore = projects.NewStore(dataDir)
+	s.wikiStore = wiki.NewStore(dataDir)
+
+	// Load persisted data
+	if err := s.discussionStore.Load(); err != nil {
+		slog.Warn("failed to load discussions", "error", err)
+	}
+	if err := s.projectStore.Load(); err != nil {
+		slog.Warn("failed to load projects", "error", err)
+	}
+	if err := s.wikiStore.Load(); err != nil {
+		slog.Warn("failed to load wiki", "error", err)
+	}
+
+	// In-memory code search index (lazy build, invalidated on push).
+	s.searchIndex = search.New(s.repos)
+	handlers.OnRepoChanged = s.searchIndex.Invalidate
+
+	// Initialize the service factory and services (Phase 3).
+	// This wraps existing stores in adapters that implement domain interfaces.
+	s.serviceFactory = service.NewServiceFactory(
+		// RepositoryRepository interface (implemented by RepositoryAdapter)
+		adapters.NewRepositoryAdapter(s.repos),
+		nil, // TODO: create IssueRepository adapter
+		nil, // TODO: create PRRepository adapter
+		nil, // TODO: create LabelRepository adapter
+		nil, // TODO: create TaskRepository adapter
+		nil, // TODO: create ReleaseRepository adapter
+	)
+	s.repoService = s.serviceFactory.CreateRepositoryService()
 
 	s.setupMiddleware()
 	s.setupRoutes()
@@ -236,6 +287,36 @@ func (s *Server) SetNetwork(node *network.Node, pinner network.ObjectPinner) {
 // SetAuthService sets the auth service for user authentication
 func (s *Server) SetAuthService(auth *store.AuthService) {
 	s.authService = auth
+	s.registerAuthRoutes()
+}
+
+// registerAuthRoutes registers authentication routes (called after authService is set)
+func (s *Server) registerAuthRoutes() {
+	if s.authService == nil {
+		return
+	}
+
+	authHandler := handlers.NewAuthHandler(s.authService)
+	s.router.Post("/api/v1/auth/register", authHandler.Register)
+	s.router.Post("/api/v1/auth/login", authHandler.Login)
+	s.router.Post("/api/v1/auth/logout", authHandler.Logout)
+
+	s.router.Group(func(r chi.Router) {
+		r.Use(authMiddleware.SessionAuthMiddleware(s.authService))
+		r.Get("/api/v1/auth/profile", authHandler.GetProfile)
+	})
+
+	userHandler := handlers.NewUserHandler(s.authService.Users)
+	s.router.Group(func(r chi.Router) {
+		r.Use(authMiddleware.RequireIdentity)
+		r.Get("/api/v1/users", userHandler.ListUsers)
+		r.Get("/api/v1/users/{id}", userHandler.GetUser)
+	})
+
+	// OAuth endpoints
+	oauthHandler := handlers.NewOAuthHandler(s.authService)
+	s.router.Get("/api/v1/auth/oauth/{provider}", oauthHandler.InitiateOAuth)
+	s.router.Get("/api/v1/auth/oauth/{provider}/callback", oauthHandler.CallbackOAuth)
 }
 
 // SetReviewStore sets the review comment store
@@ -303,8 +384,52 @@ func (s *Server) setupMiddleware() {
 	}))
 	s.router.Use(authMiddleware.SecurityHeaders)
 	s.router.Use(authMiddleware.NewHTTPSignatureMiddleware(s.revocations, s.nonces, s.identity.DID))
+	// Combined UCAN/session authentication middleware
+	s.router.Use(s.combinedAuthMiddleware)
 	s.router.Use(s.recordAgentActivity)
 	s.router.Use(s.rateLimiter.Middleware)
+}
+
+// combinedAuthMiddleware combines UCAN and session-based authentication
+func (s *Server) combinedAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// First check for UCAN/HTTP Signature identity
+		did := authMiddleware.GetIdentity(r)
+		if did != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Check for session-based authentication
+		if s.authService != nil {
+			token := extractSessionToken(r)
+			if token != "" {
+				user, err := s.authService.ValidateSession(r.Context(), token)
+				if err == nil && user != nil {
+					// Set the user in context using the typed key (matches GetUser)
+					ctx := authMiddleware.WithUser(r.Context(), user)
+					// Also add identity (user ID) for UCAN-style endpoint compatibility
+					ctx = context.WithValue(ctx, authMiddleware.IdentityKey, user.ID)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func extractSessionToken(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	cookie, err := r.Cookie("gitant_session")
+	if err == nil {
+		return cookie.Value
+	}
+	return ""
 }
 
 func (s *Server) recordAgentActivity(next http.Handler) http.Handler {
@@ -346,12 +471,13 @@ func (s *Server) setupRoutes() {
 
 	// Repository endpoints
 	s.router.Route("/api/v1/repos", func(r chi.Router) {
-		r.Get("/", handlers.ListRepos(s.repos, s.identity.DID))
+		// List all repos (public ones visible to all)
+		r.Get("/", handlers.ListRepos(s.repoService, s.identity.DID))
 
 		// Public read-only (private repos require auth)
 		r.Group(func(r chi.Router) {
 			r.Use(handlers.RequireRepoReadAccess(s.repos, s.identity.DID))
-			r.Get("/{id}", handlers.GetRepo(s.repos))
+			r.Get("/{id}", handlers.GetRepo(s.repoService))
 			r.Get("/{id}/stars", handlers.GetStarCount(s.repos))
 			r.Get("/{id}/clone", handlers.CloneRepo(s.repos))
 			r.Get("/{id}/refs", handlers.ListRefs(s.repos))
@@ -365,7 +491,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/{id}/prs/{prId}/comments", handlers.ListPRComments(s.prs))
 			r.Get("/{id}/files", handlers.ListFiles(s.repos))
 			r.Get("/{id}/files/{path}", handlers.GetFile(s.repos))
-			r.Get("/{id}/search", handlers.SearchCode(s.repos))
+			r.Get("/{id}/search", handlers.SearchCodeIndexed(s.searchIndex))
 			r.Get("/{id}/commits", handlers.GetCommitLog(s.repos))
 			r.Get("/{id}/diff", handlers.DiffCommits(s.repos))
 			r.Get("/{id}/diff/patch", handlers.GetDiff(s.repos))
@@ -381,7 +507,7 @@ func (s *Server) setupRoutes() {
 		// Authenticated mutating endpoints (repo creation — no repo id yet)
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware.RequireIdentity)
-			r.Post("/", handlers.CreateRepo(s.repos, s.webhooks))
+			r.Post("/", handlers.CreateRepo(s.repoService, s.webhooks))
 		})
 
 		// Repo-scoped mutating endpoints (UCAN write capability enforced)
@@ -459,25 +585,7 @@ func (s *Server) setupRoutes() {
 		})
 	})
 
-	// Auth endpoints
-	if s.authService != nil {
-		authHandler := handlers.NewAuthHandler(s.authService)
-		s.router.Post("/api/v1/auth/register", authHandler.Register)
-		s.router.Post("/api/v1/auth/login", authHandler.Login)
-		s.router.Post("/api/v1/auth/logout", authHandler.Logout)
-
-		s.router.Group(func(r chi.Router) {
-			r.Use(authMiddleware.SessionAuthMiddleware(s.authService))
-			r.Get("/api/v1/auth/profile", authHandler.GetProfile)
-		})
-
-		userHandler := handlers.NewUserHandler(s.authService.Users)
-		s.router.Group(func(r chi.Router) {
-			r.Use(authMiddleware.RequireIdentity)
-			r.Get("/api/v1/users", userHandler.ListUsers)
-			r.Get("/api/v1/users/{id}", userHandler.GetUser)
-		})
-	}
+	// Auth endpoints - now registered in registerAuthRoutes() which is called via SetAuthService()
 
 	// Review comment endpoints
 	if s.reviewStore != nil {
@@ -495,6 +603,64 @@ func (s *Server) setupRoutes() {
 			r.Delete("/api/v1/review-comments/{commentId}", reviewHandler.DeleteComment)
 		})
 	}
+
+	// Discussion endpoints
+	discussionHandler := handlers.NewDiscussionHandler(s.discussionStore)
+	s.router.Route("/api/v1/repos/{id}/discussions", func(r chi.Router) {
+		r.Get("/", discussionHandler.ListDiscussions)
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Post("/", discussionHandler.CreateDiscussion)
+		})
+		r.Route("/{discussionId}", func(r chi.Router) {
+			r.Get("/", discussionHandler.GetDiscussion)
+			r.Group(func(r chi.Router) {
+				r.Use(authMiddleware.RequireIdentity)
+				r.Post("/answers", discussionHandler.AddAnswer)
+				r.Post("/answers/{answerId}/accept", discussionHandler.AcceptAnswer)
+				r.Post("/upvote", discussionHandler.UpvoteDiscussion)
+				r.Delete("/", discussionHandler.DeleteDiscussion)
+			})
+		})
+	})
+
+	// Project/kanban endpoints
+	projectHandler := handlers.NewProjectHandler(s.projectStore)
+	s.router.Route("/api/v1/repos/{id}/projects", func(r chi.Router) {
+		r.Get("/", projectHandler.ListProjects)
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Post("/", projectHandler.CreateProject)
+		})
+		r.Route("/{projectId}", func(r chi.Router) {
+			r.Get("/", projectHandler.GetProject)
+			r.Group(func(r chi.Router) {
+				r.Use(authMiddleware.RequireIdentity)
+				r.Post("/columns/{columnId}/cards", projectHandler.AddCard)
+				r.Put("/cards/{cardId}/move", projectHandler.MoveCard)
+				r.Delete("/cards/{cardId}", projectHandler.DeleteCard)
+				r.Delete("/", projectHandler.DeleteProject)
+			})
+		})
+	})
+
+	// Wiki endpoints
+	wikiHandler := handlers.NewWikiHandler(s.wikiStore)
+	s.router.Route("/api/v1/repos/{id}/wiki", func(r chi.Router) {
+		r.Get("/", wikiHandler.ListPages)
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Post("/", wikiHandler.CreatePage)
+		})
+		r.Route("/{slug}", func(r chi.Router) {
+			r.Get("/", wikiHandler.GetPage)
+			r.Group(func(r chi.Router) {
+				r.Use(authMiddleware.RequireIdentity)
+				r.Put("/", wikiHandler.UpdatePage)
+				r.Delete("/", wikiHandler.DeletePage)
+			})
+		})
+	})
 
 	// Actions/CI endpoints (read-only, public)
 	actionsHandler := handlers.NewActionsHandler(s.runner)

@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	// UserContextKey is the context key for storing authenticated user information
 	UserContextKey contextKey = "user"
 )
 
@@ -81,6 +82,12 @@ func GetUser(r *http.Request) *store.User {
 		return nil
 	}
 	return user
+}
+
+// WithUser returns a context with the user stored under the correct typed key.
+// Use this from outside the middleware package since the contextKey type is unexported.
+func WithUser(ctx context.Context, user *store.User) context.Context {
+	return context.WithValue(ctx, UserContextKey, user)
 }
 
 // extractSessionToken extracts the session token from the request

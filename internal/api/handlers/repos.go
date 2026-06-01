@@ -9,12 +9,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/lakshmanpatel/gitant/internal/application/ports"
+	"github.com/lakshmanpatel/gitant/internal/domain/models"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
 // CreateRepo creates a new repository
-func CreateRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http.HandlerFunc {
+func CreateRepo(repoService ports.RepositoryService, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name        string `json:"name"`
@@ -41,54 +43,81 @@ func CreateRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http
 			return
 		}
 
-		entry, err := registry.Create(req.Name, req.Name, req.Description, req.Private)
+		// Extract owner from auth context (simplified for now)
+		owner := "unknown" // TODO: extract from auth
+
+		repo, err := repoService.CreateRepository(r.Context(), ports.CreateRepoRequest{
+			Name:        req.Name,
+			Description: req.Description,
+			Private:     req.Private,
+			Owner:       owner,
+		})
 		if err != nil {
 			http.Error(w, SanitizeError(err, "failed to create repository"), http.StatusConflict)
 			return
 		}
 
+		// Dispatch webhook event
 		wm.Dispatch(webhooks.Event{
 			Type: webhooks.EventRepoCreated,
-			Repo: entry.Name,
+			Repo: repo.Name,
 			Data: map[string]interface{}{
-				"id":          entry.ID,
-				"description": entry.Description,
-				"private":     entry.Private,
+				"id":          repo.ID,
+				"description": repo.Description,
+				"private":     repo.Private,
 			},
 		})
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":          entry.ID,
-			"name":        entry.Name,
-			"description": entry.Description,
-			"private":     entry.Private,
-			"created_at":  entry.CreatedAt,
+			"id":          repo.ID,
+			"name":        repo.Name,
+			"description": repo.Description,
+			"private":     repo.Private,
+			"created_at":  repo.CreatedAt,
 		})
 	}
 }
 
 // ListRepos lists all repositories visible to the caller.
-func ListRepos(registry *storage.RepositoryRegistry, serverDID string) http.HandlerFunc {
+func ListRepos(repoService ports.RepositoryService, serverDID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		offset, limit := ParsePagination(r)
-		repos := registry.List()
 
+		// Call the service layer to get all repositories
+		// Note: The service returns all repos; access filtering happens here for now
+		// (ideally this moves to the service in Phase 3)
+		repos, _, err := repoService.ListRepositories(r.Context(), models.RepositoryFilters{})
+		if err != nil {
+			http.Error(w, SanitizeError(err, "failed to list repositories"), http.StatusInternalServerError)
+			return
+		}
+
+		// Convert to response format (still filtering by access for now)
 		result := make([]map[string]interface{}, 0, len(repos))
-		for _, entry := range repos {
+		for _, repo := range repos {
+			// For compatibility with existing CanAccessRepo logic, we need RepoEntry
+			// This is a temporary workaround - ideally this filtering moves to the service
+			entry := &storage.RepoEntry{
+				ID:          repo.ID,
+				Name:        repo.Name,
+				Description: repo.Description,
+				Private:     repo.Private,
+			}
 			if !CanAccessRepo(r, entry, serverDID) {
 				continue
 			}
 			result = append(result, map[string]interface{}{
-				"id":          entry.ID,
-				"name":        entry.Name,
-				"description": entry.Description,
-				"private":     entry.Private,
-				"created_at":  entry.CreatedAt,
+				"id":          repo.ID,
+				"name":        repo.Name,
+				"description": repo.Description,
+				"private":     repo.Private,
+				"created_at":  repo.CreatedAt.Format("2006-01-02T15:04:05Z"),
 			})
 		}
 
+		// Now paginate the filtered results
 		paged, total := PaginateSlice(result, offset, limit)
 
 		w.Header().Set("Content-Type", "application/json")
@@ -102,11 +131,11 @@ func ListRepos(registry *storage.RepositoryRegistry, serverDID string) http.Hand
 }
 
 // GetRepo gets a repository by ID
-func GetRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
+func GetRepo(repoService ports.RepositoryService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 
-		entry, err := registry.GetEntry(id)
+		repo, err := repoService.GetRepository(r.Context(), id)
 		if err != nil {
 			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
 			return
@@ -114,11 +143,11 @@ func GetRepo(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id":          entry.ID,
-			"name":        entry.Name,
-			"description": entry.Description,
-			"private":     entry.Private,
-			"created_at":  entry.CreatedAt,
+			"id":          repo.ID,
+			"name":        repo.Name,
+			"description": repo.Description,
+			"private":     repo.Private,
+			"created_at":  repo.CreatedAt,
 		})
 	}
 }

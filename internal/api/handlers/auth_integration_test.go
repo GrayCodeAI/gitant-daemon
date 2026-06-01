@@ -10,6 +10,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/identity"
+	"github.com/lakshmanpatel/gitant/internal/application/service"
+	"github.com/lakshmanpatel/gitant/internal/infrastructure/adapters"
 )
 
 func setupAuthIntegrationRouter(t *testing.T) (*chi.Mux, *identity.Identity) {
@@ -25,6 +27,11 @@ func setupAuthIntegrationRouter(t *testing.T) (*chi.Mux, *identity.Identity) {
 	wm := setupTestWebhookManager(t)
 	revocations := identity.NewRevocationStore("")
 
+	// Create repository service for the handler
+	repoAdapter := adapters.NewRepositoryAdapter(reg)
+	factory := service.NewServiceFactory(repoAdapter, nil, nil, nil, nil, nil)
+	repoService := factory.CreateRepositoryService()
+
 	if _, err := reg.Create("public-repo", "public-repo", "public", false); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +45,7 @@ func setupAuthIntegrationRouter(t *testing.T) (*chi.Mux, *identity.Identity) {
 	r.Route("/api/v1/repos", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(RequireRepoReadAccess(reg, serverID.DID))
-			r.Get("/{id}", GetRepo(reg))
+			r.Get("/{id}", GetRepo(repoService))
 		})
 
 		r.Group(func(r chi.Router) {

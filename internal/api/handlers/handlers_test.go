@@ -14,8 +14,11 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
+	"github.com/lakshmanpatel/gitant/internal/application/ports"
+	"github.com/lakshmanpatel/gitant/internal/application/service"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/identity"
+	"github.com/lakshmanpatel/gitant/internal/infrastructure/adapters"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
@@ -51,6 +54,13 @@ func setupTestWebhookManager(t *testing.T) *webhooks.Manager {
 	return webhooks.NewManager()
 }
 
+func setupTestRepoService(t *testing.T, reg *storage.RepositoryRegistry) ports.RepositoryService {
+	t.Helper()
+	adapter := adapters.NewRepositoryAdapter(reg)
+	factory := service.NewServiceFactory(adapter, nil, nil, nil, nil, nil)
+	return factory.CreateRepositoryService()
+}
+
 func setupTestIdentity(t *testing.T) (*identity.Identity, error) {
 	t.Helper()
 	return identity.NewIdentity()
@@ -65,7 +75,8 @@ func chiRouter() *chi.Mux {
 func TestCreateRepo(t *testing.T) {
 	reg := setupTestRegistry(t)
 	wm := setupTestWebhookManager(t)
-	handler := CreateRepo(reg, wm)
+	repoService := setupTestRepoService(t, reg)
+	handler := CreateRepo(repoService, wm)
 
 	body := `{"name":"test-repo","description":"A test","private":false}`
 	req := httptest.NewRequest("POST", "/", bytes.NewBufferString(body))
@@ -88,7 +99,8 @@ func TestCreateRepo(t *testing.T) {
 func TestCreateRepoMissingName(t *testing.T) {
 	reg := setupTestRegistry(t)
 	wm := setupTestWebhookManager(t)
-	handler := CreateRepo(reg, wm)
+	repoService := setupTestRepoService(t, reg)
+	handler := CreateRepo(repoService, wm)
 
 	body := `{"description":"no name"}`
 	req := httptest.NewRequest("POST", "/", bytes.NewBufferString(body))
@@ -107,7 +119,8 @@ func TestListRepos(t *testing.T) {
 	reg.Create("repo1", "repo1", "first", false)
 	reg.Create("repo2", "repo2", "second", true)
 
-	handler := ListRepos(reg, "")
+	repoService := setupTestRepoService(t, reg)
+	handler := ListRepos(repoService, "")
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
 
@@ -128,8 +141,9 @@ func TestGetRepo(t *testing.T) {
 	reg := setupTestRegistry(t)
 	reg.Create("myrepo", "myrepo", "desc", false)
 
+	repoService := setupTestRepoService(t, reg)
 	r := chiRouter()
-	r.Get("/{id}", GetRepo(reg))
+	r.Get("/{id}", GetRepo(repoService))
 
 	req := httptest.NewRequest("GET", "/myrepo", nil)
 	w := httptest.NewRecorder()
@@ -143,9 +157,10 @@ func TestGetRepo(t *testing.T) {
 
 func TestGetRepoNotFound(t *testing.T) {
 	reg := setupTestRegistry(t)
+	repoService := setupTestRepoService(t, reg)
 
 	r := chiRouter()
-	r.Get("/{id}", GetRepo(reg))
+	r.Get("/{id}", GetRepo(repoService))
 
 	req := httptest.NewRequest("GET", "/nonexistent", nil)
 	w := httptest.NewRecorder()

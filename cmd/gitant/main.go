@@ -19,6 +19,8 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/network"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/store"
+	sqlitepkg "github.com/lakshmanpatel/gitant/internal/store/sqlite"
+	"github.com/lakshmanpatel/gitant/internal/transport"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 	"github.com/spf13/cobra"
 )
@@ -211,6 +213,34 @@ var serveCmd = &cobra.Command{
 
 		tlsCert, _ := cmd.Flags().GetString("tls-cert")
 		tlsKey, _ := cmd.Flags().GetString("tls-key")
+
+		// Start SSH server if enabled
+		sshEnabled, _ := cmd.Flags().GetBool("ssh")
+		if sshEnabled {
+			sshPort, _ := cmd.Flags().GetInt("ssh-port")
+			sshHostKeyPath, _ := cmd.Flags().GetString("ssh-host-key")
+			sshAuthorizedKeysPath, _ := cmd.Flags().GetString("ssh-authorized-keys")
+
+			sshConfig := transport.SSHConfig{
+				Port:              sshPort,
+				HostKeyPath:       sshHostKeyPath,
+				AuthorizedKeysPath: sshAuthorizedKeysPath,
+			}
+
+			sshServer, err := transport.NewSSHServer(sshConfig)
+			if err != nil {
+				slog.Error("failed to create SSH server", "error", err)
+				os.Exit(1)
+			}
+
+			if err := sshServer.Start(); err != nil {
+				slog.Error("failed to start SSH server", "error", err)
+				os.Exit(1)
+			}
+
+			slog.Info("SSH server started", "port", sshServer.GetPort())
+			defer sshServer.Stop()
+		}
 
 		// Start server in a goroutine
 		errCh := make(chan error, 1)
@@ -502,6 +532,78 @@ func copyDir(src, dst string) error {
 	})
 }
 
+var migrateCmd = &cobra.Command{
+	Use:   "migrate",
+	Short: "Run database migrations",
+	Long:  "Run database migrations to upgrade or downgrade the SQLite database schema.",
+}
+
+var migrateUpCmd = &cobra.Command{
+	Use:   "up",
+	Short: "Apply all pending migrations",
+	Run: func(cmd *cobra.Command, args []string) {
+		dataDir, _ := cmd.Flags().GetString("data-dir")
+		if dataDir == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			dataDir = filepath.Join(home, ".gitant")
+		}
+
+		fmt.Printf("Applying migrations to %s...\n", dataDir)
+
+		// Import the sqlite package and create a store
+		// This will automatically run migrations on NewStore
+		sqliteStore, err := createSQLiteStore(dataDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		defer sqliteStore.Close()
+
+		fmt.Println("Migrations applied successfully!")
+	},
+}
+
+var migrateDownCmd = &cobra.Command{
+	Use:   "down",
+	Short: "Roll back all migrations",
+	Run: func(cmd *cobra.Command, args []string) {
+		dataDir, _ := cmd.Flags().GetString("data-dir")
+		if dataDir == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			dataDir = filepath.Join(home, ".gitant")
+		}
+
+		fmt.Printf("Rolling back migrations from %s...\n", dataDir)
+		fmt.Println("Warning: This will delete all SQLite data!")
+
+		// For downgrade, we need to manually call migrate
+		// The package doesn't expose Down() directly via the Store
+		// We'll use the migrate package directly
+		dbPath := filepath.Join(dataDir, "gitant.db")
+
+		// Remove the database file to effectively rollback
+		if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "Error removing database: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("Migrations rolled back successfully!")
+	},
+}
+
+// Helper function to create SQLite store
+func createSQLiteStore(dataDir string) (*sqlitepkg.Store, error) {
+	return sqlitepkg.NewStore(dataDir)
+}
+
 func init() {
 	serveCmd.Flags().IntP("port", "p", 7777, "Port to listen on")
 	serveCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")
@@ -512,6 +614,10 @@ func init() {
 	serveCmd.Flags().Bool("p2p-mdns", true, "Enable mDNS peer discovery on LAN")
 	serveCmd.Flags().StringSlice("bootstrap-peers", nil, "Bootstrap peer multiaddrs (repeatable)")
 	serveCmd.Flags().Bool("ipfs-pin", false, "Pin replicated git objects in warm IPFS storage")
+	serveCmd.Flags().Bool("ssh", false, "Enable SSH server for git operations")
+	serveCmd.Flags().Int("ssh-port", 2222, "SSH server port")
+	serveCmd.Flags().String("ssh-host-key", "", "SSH host key file path (default: ~/.ssh/id_rsa)")
+	serveCmd.Flags().String("ssh-authorized-keys", "", "SSH authorized keys file path")
 
 	seedCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")
 	seedCmd.Flags().String("p2p-listen", "/ip4/0.0.0.0/tcp/4001", "libp2p listen multiaddr")
@@ -525,6 +631,11 @@ func init() {
 	pullCmd.MarkFlagRequired("repo")
 	cloneCmd.Flags().StringP("remote", "r", "http://localhost:7777", "Remote daemon URL")
 
+	migrateUpCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")
+	migrateDownCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")
+	migrateCmd.AddCommand(migrateUpCmd)
+	migrateCmd.AddCommand(migrateDownCmd)
+
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(seedCmd)
 	rootCmd.AddCommand(versionCmd)
@@ -535,6 +646,7 @@ func init() {
 	rootCmd.AddCommand(backupCmd)
 	rootCmd.AddCommand(restoreCmd)
 	rootCmd.AddCommand(rotateKeyCmd)
+	rootCmd.AddCommand(migrateCmd)
 
 	backupCmd.Flags().StringP("output", "o", "", "Backup output directory (required)")
 	backupCmd.Flags().StringP("data-dir", "d", "", "Data directory (default: ~/.gitant)")

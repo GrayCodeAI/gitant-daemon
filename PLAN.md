@@ -257,13 +257,16 @@ Reference: gitlawb (libp2p DHT + GossipSub per repo), Radicle (git-native issues
 
 ## Phase E — Future (Post v1.0)
 
+- [x] Discussions/Q&A (`internal/discussions/`, `/api/v1/repos/{id}/discussions`)
+- [x] Projects (Kanban) (`internal/projects/`, `/api/v1/repos/{id}/projects`)
+- [x] OAuth/OIDC SSO — GitHub, GitLab, Google (`/api/v1/auth/oauth/{provider}`)
+- [x] SSH transport (`gitant serve --ssh`, `internal/transport/ssh.go`)
+- [ ] SAML SSO (OIDC/OAuth done; SAML not yet)
+- [ ] Indexed code search (current search is a substring scan, not an index)
 - [ ] Agent marketplace
 - [ ] IDE extensions (VS Code, JetBrains)
 - [ ] Mobile app
 - [ ] GitHub/GitLab import
-- [ ] Discussions/Q&A
-- [ ] Projects (Kanban)
-- [ ] SAML/SSO
 - [ ] Audit log
 - [ ] PostgreSQL support
 - [ ] Redis caching
@@ -363,12 +366,36 @@ DELETE /api/v1/packages/:name    - Delete package
 
 ### Wiki
 ```
-GET    /api/v1/repos/:id/wiki/pages          - List wiki pages
-GET    /api/v1/repos/:id/wiki/pages/:slug    - Get wiki page
-POST   /api/v1/repos/:id/wiki/pages          - Create wiki page
-PUT    /api/v1/repos/:id/wiki/pages/:slug    - Update wiki page
-DELETE /api/v1/repos/:id/wiki/pages/:slug    - Delete wiki page
-GET    /api/v1/repos/:id/wiki/search?q=      - Search wiki
+GET    /api/v1/repos/:id/wiki          - List wiki pages
+GET    /api/v1/repos/:id/wiki/:slug    - Get wiki page
+POST   /api/v1/repos/:id/wiki          - Create wiki page
+PUT    /api/v1/repos/:id/wiki/:slug    - Update wiki page
+DELETE /api/v1/repos/:id/wiki/:slug    - Delete wiki page
+```
+
+### Discussions
+```
+GET    /api/v1/repos/:id/discussions                                  - List discussions
+POST   /api/v1/repos/:id/discussions                                  - Create discussion
+GET    /api/v1/repos/:id/discussions/:discussionId                    - Get discussion
+POST   /api/v1/repos/:id/discussions/:discussionId/answers            - Add answer
+POST   /api/v1/repos/:id/discussions/:discussionId/answers/:id/accept - Accept answer
+POST   /api/v1/repos/:id/discussions/:discussionId/upvote             - Upvote
+```
+
+### Projects (Kanban)
+```
+GET    /api/v1/repos/:id/projects                                     - List projects
+POST   /api/v1/repos/:id/projects                                     - Create project
+GET    /api/v1/repos/:id/projects/:projectId                          - Get project
+POST   /api/v1/repos/:id/projects/:projectId/columns/:colId/cards     - Add card
+PUT    /api/v1/repos/:id/projects/:projectId/cards/:cardId/move       - Move card
+```
+
+### SSO / OAuth
+```
+GET    /api/v1/auth/oauth/:provider           - Begin OAuth login
+GET    /api/v1/auth/oauth/:provider/callback  - OAuth callback
 ```
 
 ### Notifications

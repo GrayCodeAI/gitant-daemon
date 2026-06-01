@@ -2,15 +2,44 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/filemode"
+	"github.com/lakshmanpatel/gitant/internal/search"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 )
+
+// SearchCodeIndexed serves code search from the in-memory search index. The
+// response shape is identical to the legacy SearchCode handler
+// ({query, results:[{file,line,context}], total}) so all consumers keep working.
+func SearchCodeIndexed(ix *search.Index) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoID := chi.URLParam(r, "id")
+		query := r.URL.Query().Get("q")
+		ref := r.URL.Query().Get("ref")
+
+		if query == "" {
+			http.Error(w, "Query parameter 'q' is required", http.StatusBadRequest)
+			return
+		}
+
+		offset, limit := ParsePagination(r)
+		results, total, err := ix.Search(repoID, query, ref, offset, limit)
+		if err != nil {
+			http.Error(w, SanitizeError(err, "search failed"), http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"query":   query,
+			"results": results,
+			"total":   total,
+		})
+	}
+}
 
 // ListFiles lists files in a repository tree
 func ListFiles(registry *storage.RepositoryRegistry) http.HandlerFunc {
@@ -156,129 +185,6 @@ func GetFile(registry *storage.RepositoryRegistry) http.HandlerFunc {
 	}
 }
 
-// SearchCode searches for text in repository blobs
-func SearchCode(registry *storage.RepositoryRegistry) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		repoID := chi.URLParam(r, "id")
-		query := r.URL.Query().Get("q")
-		ref := r.URL.Query().Get("ref")
-
-		if query == "" {
-			http.Error(w, "Query parameter 'q' is required", http.StatusBadRequest)
-			return
-		}
-
-		repo, err := registry.Open(repoID)
-		if err != nil {
-			http.Error(w, SanitizeError(err, "repository not found"), http.StatusNotFound)
-			return
-		}
-
-		// Get starting commit
-		var startHash plumbing.Hash
-		if ref != "" {
-			hash, err := repo.GetBranch(ref)
-			if err != nil {
-				http.Error(w, "Branch not found: "+ref, http.StatusNotFound)
-				return
-			}
-			startHash = hash
-		} else {
-			refs, err := repo.ListAllRefs()
-			if err != nil || len(refs) == 0 {
-				http.Error(w, "No refs found", http.StatusNotFound)
-				return
-			}
-			for _, ref := range refs {
-				if strings.HasSuffix(ref.Name, "/HEAD") || strings.HasSuffix(ref.Name, "/main") || strings.HasSuffix(ref.Name, "/master") {
-					startHash = plumbing.NewHash(ref.Hash)
-					break
-				}
-			}
-			if startHash.IsZero() {
-				startHash = plumbing.NewHash(refs[0].Hash)
-			}
-		}
-
-		// Get commit to access tree
-		commit, err := repo.GetCommit(startHash)
-		if err != nil {
-			http.Error(w, SanitizeError(err, "commit not found"), http.StatusInternalServerError)
-			return
-		}
-
-		// Walk tree and search blobs
-		offset, limit := ParsePagination(r)
-		results := searchTree(repo, commit.TreeHash, commit.TreeHash, "", query)
-
-		paged, total := PaginateSlice(results, offset, limit)
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"query":   query,
-			"results": paged,
-			"total":   total,
-		})
-	}
-}
-
-// searchTree recursively walks the tree and finds blobs containing the query
-// rootHash is used for GetFileFromTree (full path resolution), currentHash is the subtree being listed
-func searchTree(repo *storage.Repository, rootHash, currentHash plumbing.Hash, path string, query string) []map[string]interface{} {
-	return searchTreeDepth(repo, rootHash, currentHash, path, query, 0)
-}
-
-const maxSearchDepth = 32
-
-func searchTreeDepth(repo *storage.Repository, rootHash, currentHash plumbing.Hash, path string, query string, depth int) []map[string]interface{} {
-	var results []map[string]interface{}
-
-	if depth >= maxSearchDepth {
-		return results
-	}
-
-	entries, err := repo.ListTreeEntries(currentHash, "")
-	if err != nil {
-		return results
-	}
-
-	lowerQuery := strings.ToLower(query)
-
-	for _, entry := range entries {
-		entryPath := entry.Name
-		if path != "" {
-			entryPath = path + "/" + entry.Name
-		}
-
-		if entry.Mode == filemode.Dir {
-			subResults := searchTreeDepth(repo, rootHash, entry.Hash, entryPath, query, depth+1)
-			results = append(results, subResults...)
-		} else {
-			content, err := repo.GetFileFromTree(rootHash, entryPath)
-			if err != nil {
-				continue
-			}
-
-			lines := strings.Split(string(content), "\n")
-			for i, line := range lines {
-				if strings.Contains(strings.ToLower(line), lowerQuery) {
-					context := line
-					if len(context) > 200 {
-						context = context[:200] + "..."
-					}
-					results = append(results, map[string]interface{}{
-						"file":    entryPath,
-						"line":    i + 1,
-						"context": fmt.Sprintf("%s:%d: %s", entryPath, i+1, strings.TrimSpace(context)),
-					})
-
-					if len(results) >= 1000 {
-						return results
-					}
-				}
-			}
-		}
-	}
-
-	return results
-}
+// Code search is served by SearchCodeIndexed (see top of this file), backed by
+// the in-memory index in internal/search. The previous per-request tree-walk
+// scanner (SearchCode/searchTree) was removed in favor of the cached index.

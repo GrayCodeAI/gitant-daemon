@@ -172,13 +172,50 @@ curl http://localhost:7777/api/v1/openapi.json
 # List repos (paginated)
 curl http://localhost:7777/api/v1/repos?offset=0&limit=20
 
-# Search code
+# Search code (substring scan; not yet a persistent index)
 curl "http://localhost:7777/api/v1/repos/my-project/search?q=function"
+```
+
+### Community features
+
+Per-repository collaboration endpoints (GET is public; create/modify require auth):
+
+```bash
+# Discussions (Q&A / forum threads)
+GET    /api/v1/repos/{id}/discussions
+POST   /api/v1/repos/{id}/discussions
+GET    /api/v1/repos/{id}/discussions/{discussionId}
+POST   /api/v1/repos/{id}/discussions/{discussionId}/answers
+POST   /api/v1/repos/{id}/discussions/{discussionId}/answers/{answerId}/accept
+POST   /api/v1/repos/{id}/discussions/{discussionId}/upvote
+
+# Project boards (kanban columns + cards)
+GET    /api/v1/repos/{id}/projects
+POST   /api/v1/repos/{id}/projects
+GET    /api/v1/repos/{id}/projects/{projectId}
+POST   /api/v1/repos/{id}/projects/{projectId}/columns/{columnId}/cards
+PUT    /api/v1/repos/{id}/projects/{projectId}/cards/{cardId}/move
+
+# Wiki
+GET    /api/v1/repos/{id}/wiki
+POST   /api/v1/repos/{id}/wiki
+GET    /api/v1/repos/{id}/wiki/{slug}
+PUT    /api/v1/repos/{id}/wiki/{slug}
+DELETE /api/v1/repos/{id}/wiki/{slug}
 ```
 
 ## Authentication
 
-Endpoints that modify state (POST/PUT/DELETE) require authentication via UCAN Bearer tokens:
+Endpoints that modify state (POST/PUT/DELETE) require authentication. The daemon
+accepts three credential types on the `Authorization: Bearer <token>` header (or
+the `gitant_session` cookie for sessions):
+
+1. **UCAN Bearer tokens** — capability-based, used by agents and the CLI.
+2. **HTTP Signatures** (RFC 9421) — for signed requests.
+3. **Session tokens** — opaque tokens issued by username/password or OAuth login,
+   used by the web frontend.
+
+### UCAN (agents / CLI)
 
 ```bash
 # Generate a DID
@@ -193,6 +230,35 @@ curl -X POST http://localhost:7777/api/v1/agents/<did>/delegate \
 curl -X POST http://localhost:7777/api/v1/repos \
   -H 'Authorization: Bearer <ucan-token>' \
   -d '{"name":"my-repo"}'
+```
+
+### Username / password sessions
+
+```bash
+# Register
+curl -X POST http://localhost:7777/api/v1/auth/register \
+  -d '{"username":"alice","email":"alice@example.com","password":"…"}'
+
+# Login → returns {"token": "<session-token>", "user": {…}}
+curl -X POST http://localhost:7777/api/v1/auth/login \
+  -d '{"username":"alice","password":"…"}'
+
+# Use the session token like any Bearer token
+curl -X POST http://localhost:7777/api/v1/repos \
+  -H 'Authorization: Bearer <session-token>' \
+  -d '{"name":"my-repo"}'
+```
+
+### Single Sign-On (OAuth / OIDC)
+
+Configured providers (GitHub, GitLab, Google) expose an OAuth flow:
+
+```bash
+# Begin login (redirects to the provider)
+GET  /api/v1/auth/oauth/{provider}
+
+# Provider redirects back here, which establishes a session
+GET  /api/v1/auth/oauth/{provider}/callback
 ```
 
 GET endpoints are public (no auth required).
@@ -214,6 +280,40 @@ GET endpoints are public (no auth required).
 
 # Behind reverse proxy (no TLS flags needed)
 ./bin/gitant serve --port 7777
+```
+
+### SSH transport
+
+In addition to HTTP, the daemon can serve Git over SSH (`git-upload-pack` /
+`git-receive-pack`):
+
+```bash
+# Enable the SSH server (defaults to port 2222)
+./bin/gitant serve --ssh --ssh-port 2222
+
+# Optional: provide a host key and authorized-keys file
+./bin/gitant serve --ssh \
+  --ssh-host-key ~/.ssh/id_rsa \
+  --ssh-authorized-keys ~/.ssh/authorized_keys
+```
+
+If no host key is supplied, one is generated on first start. Clone/push via SSH:
+
+```bash
+git clone ssh://git@localhost:2222/my-repo
+git push ssh://git@localhost:2222/my-repo
+```
+
+### Storage
+
+State (users, sessions, issues, PRs, labels, tasks, releases, branch
+protections, review comments, OAuth providers) is persisted to a local
+**SQLite** database, migrated automatically on start. Run migrations manually
+with:
+
+```bash
+./bin/gitant migrate up      # apply migrations
+./bin/gitant migrate down    # roll back
 ```
 
 ## Production Deployment

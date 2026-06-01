@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### 🔧 Changed
+- **Refactored to Hexagonal/Clean Architecture** — Domain-driven design with clear layering (Transport → Application → Domain → Infrastructure)
+- **Service-layer abstraction** — HTTP handlers now use service interfaces instead of concrete store implementations
+- **Interface-based DI** — Repository interfaces enable easy mocking and testing
+- **Reduced Server dependencies** — Server struct simplified with service factory pattern
+- **SQLite storage** — All entities (users, sessions, issues, PRs, labels, tasks, releases) persisted to SQLite with migrations
+
+### ✨ Added
+- **SQLite storage layer** — users, sessions, issues, PRs, labels, tasks,
+  releases, branch protections, review comments, and OAuth providers are now
+  persisted to SQLite with automatic migrations (`gitant migrate up/down`).
+- **SSH transport** — serve Git over SSH (`git-upload-pack` / `git-receive-pack`)
+  via `gitant serve --ssh` (default port 2222), with host-key generation and an
+  optional authorized-keys file.
+- **SSO / OAuth login** — GitHub, GitLab, and Google providers via
+  `/api/v1/auth/oauth/{provider}` and its callback.
+- **Session auth on the Bearer header** — opaque session tokens (from
+  username/password or OAuth login) are now accepted on `Authorization: Bearer`,
+  alongside UCANs and HTTP Signatures.
+- **Community features wired to routes** — discussions, project boards (kanban),
+  and wiki endpoints under `/api/v1/repos/{id}/{discussions,projects,wiki}` are
+  now active and persisted. CLI (`gitant discussion|project|wiki|forum`) and MCP
+  (`gitant_*_discussion|project|wiki`) tools target these live routes.
+
+### 🔧 Changed
+- Bearer tokens that are not UCAN-shaped now fall through to session validation
+  instead of being rejected outright.
+
+### ⚠️ Known limitations
+- Code search is still a substring scan, not a persistent index.
+
 ## v0.1.0 (2026-05-27) — Initial Beta Release
 
 ### 🎉 Highlights
