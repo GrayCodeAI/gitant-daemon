@@ -1,30 +1,37 @@
-# gitant-daemon
+<div align="center">
 
-Server for [Gitant](https://github.com/GrayCodeAI/gitant-daemon) — decentralized Git hosting for solo developers and AI agents.
+# ⭐ gitant-daemon
 
-**Developers:** install the CLI from [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli) (push, issues, PRs).  
-**Operators:** run this repo (`gitant serve`) or Docker.  
-**Browser:** use [`gitant-web`](https://github.com/GrayCodeAI/gitant-web).  
-**Agents:** use [`gitant-mcp`](https://github.com/GrayCodeAI/gitant-mcp) (64 MCP tools).
+**Decentralized Git hosting server** — P2P networking, CRDT collaboration, AI agent support.
 
-Full walkthrough: **[Developer quickstart](docs/QUICKSTART.md)** (CLI + daemon + web + MCP + auth).
+![License](https://img.shields.io/badge/license-MIT-blue)
+[![Release](https://img.shields.io/github/v/release/GrayCodeAI/gitant-daemon)](https://github.com/GrayCodeAI/gitant-daemon/releases)
+[![Go Version](https://img.shields.io/badge/go-1.26+-blue)](https://go.dev/doc/install)
+[![CI](https://github.com/GrayCodeAI/gitant-daemon/actions/workflows/ci.yml/badge.svg)](https://github.com/GrayCodeAI/gitant-daemon/actions)
+[![Docker](https://img.shields.io/badge/docker-available-blue)](https://github.com/GrayCodeAI/gitant-daemon/pkgs/container/gitant-daemon)
 
-## Quick Start
+**Git + Issues + PRs + AI Agents** — all in a single server.
 
-### For developers (CLI)
+</div>
 
-Install the client and point it at your node:
+---
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/GrayCodeAI/gitant-cli/main/scripts/install.sh | bash
-export GITANT_DAEMON_URL=http://localhost:7777
-gitant doctor
-gitant repo list
-```
+## 🌟 What is Gitant?
 
-See the [gitant-cli README](https://github.com/GrayCodeAI/gitant-cli) for all commands.
+**Gitant** is a decentralized Git hosting platform for solo developers and AI agents.
 
-### Run the server (Docker — recommended)
+| Component | Role |
+|-----------|------|
+| [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli) | **Developer CLI** — push/pull, issues, PRs, agents |
+| [`gitant-daemon`](https://github.com/GrayCodeAI/gitant-daemon) | **Server** — HTTP API, git smart HTTP, optional P2P |
+| [`gitant-web`](https://github.com/GrayCodeAI/gitant-web) | **Dashboard** — Browser UI (Next.js) |
+| [`gitant-mcp`](https://github.com/GrayCodeAI/gitant-mcp) | **Agents** — MCP tools for AI integration |
+
+---
+
+## 🚀 Quick Start
+
+### Option 1: Docker (Recommended)
 
 ```bash
 git clone https://github.com/GrayCodeAI/gitant-daemon.git
@@ -32,293 +39,165 @@ cd gitant-daemon
 docker compose up -d
 ```
 
-Your node is running at `http://localhost:7777`.
+Your node is running at **http://localhost:7777** 🎉
 
-### Install daemon release
-
-**Pre-built server binary** — [GitHub Releases](https://github.com/GrayCodeAI/gitant-daemon/releases):
+### Option 2: Pre-built Binary
 
 ```bash
-# macOS (Apple Silicon example)
+# macOS (Apple Silicon)
 curl -LO https://github.com/GrayCodeAI/gitant-daemon/releases/latest/download/gitant-daemon_<version>_Darwin_arm64.tar.gz
 tar xzf gitant-daemon_*_Darwin_arm64.tar.gz
-sudo mv gitant /usr/local/bin/   # provides `gitant serve`
+sudo mv gitant /usr/local/bin/
+
+# Run
+gitant serve
 ```
 
-For push/pull/clone and API commands, also install [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli).
-
-**Go install** (requires Go 1.26+):
+### Option 3: Go Install
 
 ```bash
-go install github.com/lakshmanpatel/gitant/cmd/gitant@v0.1.0
+go install github.com/GrayCodeAI/gitant/cmd/gitant@v0.1.0
+gitant serve
 ```
 
-**Container** (published on tag push):
+### Option 4: From Source
 
 ```bash
-docker pull ghcr.io/graycodeai/gitant-daemon:latest
-docker run -p 7777:7777 -v gitant-data:/home/gitant/.gitant ghcr.io/graycodeai/gitant-daemon:latest
-```
-
-Check the running version:
-
-```bash
-gitant serve --help
-curl -s http://localhost:7777/api/v1/status | jq .version
-```
-
-### From source
-
-Requires Go 1.26+.
-
-```bash
+git clone https://github.com/GrayCodeAI/gitant-daemon.git
+cd gitant-daemon
 make build
-make run    # starts gitant serve
-```
-
-Or manually:
-
-```bash
-go build -o bin/gitant ./cmd/gitant/
 ./bin/gitant serve
 ```
 
-Install the CLI separately from [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli) for `push`, `issue`, `pr`, etc.
+> 💡 **Note**: For CLI commands (`push`, `pull`, `issues`, `PRs`), also install [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli).
 
-### First repo
+---
 
-With [gitant-cli](https://github.com/GrayCodeAI/gitant-cli) installed and the daemon running:
+## 🏗️ Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     gitant-daemon (Go)                      │
+├─────────────────────────────────────────────────────────────┤
+│  🌐 HTTP API (go-chi)    REST endpoints for everything     │
+│  📡 P2P Networking       libp2p (DHT + GossipSub + mDNS)   │
+│  🔐 Identity             DID:key + UCAN + HTTP Signatures   │
+│  💾 Storage              go-git + SQLite + CRDT stores     │
+│  🔍 Observability        Prometheus + structured logging    │
+│  🔒 Security             Rate limiting, TLS, validation     │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  gitant-mcp (TypeScript)    160 MCP tools for AI agents    │
+│  gitant-web (Next.js)       Web dashboard & UI             │
+│  gitant-cli (Go)            Developer CLI                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📖 API Reference
+
+All endpoints under `/api/v1/`. OpenAPI spec at `/api/v1/openapi.json`.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check with dependencies |
+| `/api/v1/status` | GET | Version, uptime, repo count |
+| `/api/v1/repos` | GET | List repos (paginated) |
+| `/api/v1/repos` | POST | Create repo |
+| `/api/v1/repos/{id}` | GET | Get repo by ID |
+| `/metrics` | GET | Prometheus metrics |
+
+### Example: Create a repo
 
 ```bash
-# Create a repo (API or web UI)
 curl -X POST http://localhost:7777/api/v1/repos \
   -H 'Content-Type: application/json' \
   -d '{"name":"my-project","description":"Hello world"}'
+```
 
-# Init locally and push
+### Example: Push code
+
+```bash
 mkdir my-project && cd my-project
 git init && git add . && git commit -m "init"
 gitant push --remote http://localhost:7777 --repo my-project
-
-# Clone elsewhere
-gitant clone my-project --remote http://localhost:7777 ./my-project-clone
 ```
 
-## Architecture
+---
 
-```
-gitant-cli (Go)            Developer CLI — push/pull, issues, PRs, agents
-gitant-daemon (Go)
-├── HTTP API (go-chi)     REST endpoints for repos, issues, PRs, files, commits
-├── P2P Networking         libp2p (DHT + GossipSub + mDNS)
-├── Identity               DID:key (Ed25519) + UCAN tokens + HTTP Signatures (RFC 9421)
-├── Storage                go-git + file-per-block content-addressed blockstore
-├── CRDT                   Issues and PRs with Lamport clocks
-├── Observability          slog structured logging + Prometheus /metrics
-└── Security               Rate limiting, input validation, TLS support
+## 🔐 Authentication
 
-gitant-mcp (TypeScript)    MCP server for AI agent integration (64 tools)
-gitant-web (Next.js)       Web frontend (dashboard, issues, PRs)
-```
+Three auth methods supported (all via `Authorization: Bearer <token>`):
 
-## CLI Reference
+| Method | Use Case |
+|--------|----------|
+| **UCAN Bearer** | Agents, CLI |
+| **HTTP Signatures** (RFC 9421) | Signed requests |
+| **Session Token** | Web frontend, username/password login |
 
-Server command (this repo):
-
-| Command | Description |
-|---------|-------------|
-| `gitant serve [--port P] [--data-dir D] [--tls-cert F] [--tls-key F] [--p2p] [--p2p-listen ADDR] [--p2p-mdns] [--bootstrap-peers ...]` | Start the daemon |
-
-Client commands live in [`gitant-cli`](https://github.com/GrayCodeAI/gitant-cli): `push`, `pull`, `clone`, `issue`, `pr`, `task`, `agent`, `doctor`, `backup`, and more.
-
-| Command | Description |
-|---------|-------------|
-| `gitant init` | Initialize a local repo |
-| `gitant push --repo <id> --remote <url>` | Push to daemon (packfile) |
-| `gitant pull --repo <id> --remote <url>` | Pull from daemon |
-| `gitant clone <repo-id> [dir] --remote <url>` | Clone from daemon |
-| `gitant backup -o <dir>` | Backup data directory |
-| `gitant restore -i <dir>` | Restore from backup |
-| `gitant issue list --repo <id>` | List issues |
-| `gitant issue create --repo <id> --title <t>` | Create issue |
-| `gitant issue close --repo <id> <id>` | Close issue |
-| `gitant issue comment --repo <id> <id> --body <t>` | Comment on issue |
-| `gitant pr list --repo <id>` | List PRs |
-| `gitant pr create --repo <id> --title <t> -s <branch>` | Create PR |
-| `gitant pr merge --repo <id> <id>` | Merge PR |
-| `gitant pr review --repo <id> <id> -v approve` | Review PR |
-| `gitant task list --repo <id>` | List tasks |
-| `gitant task create --repo <id> --title <t>` | Create task |
-| `gitant task claim --repo <id> <id>` | Claim task |
-| `gitant task complete --repo <id> <id>` | Complete task |
-
-## API
-
-All endpoints are under `/api/v1/`. OpenAPI spec available at `/api/v1/openapi.json`.
+### UCAN Example
 
 ```bash
-# Health check (with dependency status)
-curl http://localhost:7777/health
-
-# Status (version, uptime, repo count, identity)
-curl http://localhost:7777/api/v1/status
-
-# Prometheus metrics
-curl http://localhost:7777/metrics
-
-# OpenAPI spec
-curl http://localhost:7777/api/v1/openapi.json
-
-# List repos (paginated)
-curl http://localhost:7777/api/v1/repos?offset=0&limit=20
-
-# Search code (substring scan; not yet a persistent index)
-curl "http://localhost:7777/api/v1/repos/my-project/search?q=function"
-```
-
-### Community features
-
-Per-repository collaboration endpoints (GET is public; create/modify require auth):
-
-```bash
-# Discussions (Q&A / forum threads)
-GET    /api/v1/repos/{id}/discussions
-POST   /api/v1/repos/{id}/discussions
-GET    /api/v1/repos/{id}/discussions/{discussionId}
-POST   /api/v1/repos/{id}/discussions/{discussionId}/answers
-POST   /api/v1/repos/{id}/discussions/{discussionId}/answers/{answerId}/accept
-POST   /api/v1/repos/{id}/discussions/{discussionId}/upvote
-
-# Project boards (kanban columns + cards)
-GET    /api/v1/repos/{id}/projects
-POST   /api/v1/repos/{id}/projects
-GET    /api/v1/repos/{id}/projects/{projectId}
-POST   /api/v1/repos/{id}/projects/{projectId}/columns/{columnId}/cards
-PUT    /api/v1/repos/{id}/projects/{projectId}/cards/{cardId}/move
-
-# Wiki
-GET    /api/v1/repos/{id}/wiki
-POST   /api/v1/repos/{id}/wiki
-GET    /api/v1/repos/{id}/wiki/{slug}
-PUT    /api/v1/repos/{id}/wiki/{slug}
-DELETE /api/v1/repos/{id}/wiki/{slug}
-```
-
-## Authentication
-
-Endpoints that modify state (POST/PUT/DELETE) require authentication. The daemon
-accepts three credential types on the `Authorization: Bearer <token>` header (or
-the `gitant_session` cookie for sessions):
-
-1. **UCAN Bearer tokens** — capability-based, used by agents and the CLI.
-2. **HTTP Signatures** (RFC 9421) — for signed requests.
-3. **Session tokens** — opaque tokens issued by username/password or OAuth login,
-   used by the web frontend.
-
-### UCAN (agents / CLI)
-
-```bash
-# Generate a DID
+# Generate DID
 curl -X POST http://localhost:7777/api/v1/agents/generate-did
 
 # Delegate capabilities
 curl -X POST http://localhost:7777/api/v1/agents/<did>/delegate \
   -H 'Authorization: Bearer <server-ucan>' \
   -d '{"audience":"<client-did>","resource":"repo:*","actions":["read","write"]}'
-
-# Use the UCAN token
-curl -X POST http://localhost:7777/api/v1/repos \
-  -H 'Authorization: Bearer <ucan-token>' \
-  -d '{"name":"my-repo"}'
 ```
 
-### Username / password sessions
+---
 
-```bash
-# Register
-curl -X POST http://localhost:7777/api/v1/auth/register \
-  -d '{"username":"alice","email":"alice@example.com","password":"…"}'
+## ⚙️ Configuration
 
-# Login → returns {"token": "<session-token>", "user": {…}}
-curl -X POST http://localhost:7777/api/v1/auth/login \
-  -d '{"username":"alice","password":"…"}'
-
-# Use the session token like any Bearer token
-curl -X POST http://localhost:7777/api/v1/repos \
-  -H 'Authorization: Bearer <session-token>' \
-  -d '{"name":"my-repo"}'
-```
-
-### Single Sign-On (OAuth / OIDC)
-
-Configured providers (GitHub, GitLab, Google) expose an OAuth flow:
-
-```bash
-# Begin login (redirects to the provider)
-GET  /api/v1/auth/oauth/{provider}
-
-# Provider redirects back here, which establishes a session
-GET  /api/v1/auth/oauth/{provider}/callback
-```
-
-GET endpoints are public (no auth required).
-
-## Configuration
-
-| Env Variable | Default | Description |
-|-------------|---------|-------------|
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `GITANT_PORT` | `7777` | HTTP port |
-| `GITANT_DAEMON_URL` | `http://localhost:7777` | Daemon URL (for CLI/MCP) |
-| `GITANT_UCAN_TOKEN` | (none) | UCAN token (for MCP server) |
-| `GITANT_CORS_ORIGINS` | `http://localhost:3303` | Comma-separated CORS origins |
+| `GITANT_CORS_ORIGINS` | `http://localhost:3303` | CORS origins |
+| `GITANT_DAEMON_URL` | `http://localhost:7777` | For CLI/MCP |
 
-### TLS
-
-```bash
-# With TLS certificates
-./bin/gitant serve --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
-
-# Behind reverse proxy (no TLS flags needed)
-./bin/gitant serve --port 7777
-```
-
-### SSH transport
-
-In addition to HTTP, the daemon can serve Git over SSH (`git-upload-pack` /
-`git-receive-pack`):
+### TLS / HTTPS
 
 ```bash
-# Enable the SSH server (defaults to port 2222)
-./bin/gitant serve --ssh --ssh-port 2222
+# With certificates
+gitant serve --tls-cert cert.pem --tls-key key.pem
 
-# Optional: provide a host key and authorized-keys file
-./bin/gitant serve --ssh \
-  --ssh-host-key ~/.ssh/id_rsa \
-  --ssh-authorized-keys ~/.ssh/authorized_keys
+# Behind reverse proxy
+gitant serve --port 7777
 ```
 
-If no host key is supplied, one is generated on first start. Clone/push via SSH:
+### SSH Transport
+
+```bash
+gitant serve --ssh --ssh-port 2222
+```
+
+Clone via SSH:
 
 ```bash
 git clone ssh://git@localhost:2222/my-repo
-git push ssh://git@localhost:2222/my-repo
 ```
 
-### Storage
+---
 
-State (users, sessions, issues, PRs, labels, tasks, releases, branch
-protections, review comments, OAuth providers) is persisted to a local
-**SQLite** database, migrated automatically on start. Run migrations manually
-with:
+## 💾 Storage & Migrations
+
+State is persisted to **SQLite** with automatic migrations.
 
 ```bash
-./bin/gitant migrate up      # apply migrations
-./bin/gitant migrate down    # roll back
+# Manual migrations
+gitant migrate up     # Apply migrations
+gitant migrate down   # Roll back
 ```
 
-## Production Deployment
+---
 
-### Docker Compose (simple)
+## 🐳 Docker Deployment
+
+### Simple Docker Compose
 
 ```bash
 docker compose up -d
@@ -327,7 +206,6 @@ docker compose up -d
 ### With nginx reverse proxy
 
 ```bash
-# Copy nginx config
 sudo cp deploy/nginx/gitant.conf /etc/nginx/sites-available/
 sudo ln -s /etc/nginx/sites-available/gitant.conf /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
@@ -340,28 +218,9 @@ sudo cp deploy/caddy/Caddyfile /etc/caddy/
 sudo systemctl reload caddy
 ```
 
-### Backup & Restore
+---
 
-```bash
-# Create backup
-./bin/gitant backup -o /backups
-
-# Restore (won't overwrite existing files)
-./bin/gitant restore -i /backups/gitant-backup-20260522-143000
-```
-
-## Monitoring
-
-### Prometheus
-
-The `/metrics` endpoint exports:
-- `gitant_http_requests_total` — request count by method/path/status
-- `gitant_http_request_duration_seconds` — latency histogram
-- Standard Go runtime metrics
-
-### Grafana
-
-Import the dashboard from `deploy/grafana/gitant-dashboard.json` into Grafana. Panels include request rate, latency percentiles, error rate, goroutines, and memory usage.
+## 🔍 Monitoring
 
 ### Health Check
 
@@ -370,28 +229,53 @@ curl http://localhost:7777/health
 # Returns: {"status":"healthy","checks":{"identity":"ok","storage":"ok"}}
 ```
 
-Returns 503 with `{"status":"degraded"}` if dependencies are unhealthy.
-
-## Development
+### Prometheus Metrics
 
 ```bash
-# Build
-make build
-./bin/gitant version
-
-# Run tests with race detector
-make test
-
-# Lint
-make lint
-
-# All checks
-make all
-
-# Validate release config (local snapshot, no publish)
-make release
+curl http://localhost:7777/metrics
 ```
 
-## License
+Metrics include:
+- `gitant_http_requests_total` — request count by method/path/status
+- `gitant_http_request_duration_seconds` — latency histogram
+- Standard Go runtime metrics
 
-MIT
+---
+
+## 🧪 Development
+
+```bash
+make build    # Build binary
+make run      # Run server
+make test     # Run tests
+make lint     # Lint code
+make all      # All checks
+```
+
+---
+
+## 📚 Documentation
+
+- **Full Setup Guide**: [QUICKSTART.md](docs/QUICKSTART.md)
+- **Architecture Docs**: [PLAN.md](PLAN.md)
+- **CRDT Sync**: [CRDT_SYNC.md](docs/CRDT_SYNC.md)
+
+---
+
+## 📋 License
+
+**MIT** — see [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+### 🔗 Related Repos
+
+[gitant-cli](https://github.com/GrayCodeAI/gitant-cli) •
+[gitant-web](https://github.com/GrayCodeAI/gitant-web) •
+[gitant-mcp](https://github.com/GrayCodeAI/gitant-mcp)
+
+*Made with ❤️ for developers and AI agents*
+
+</div>
