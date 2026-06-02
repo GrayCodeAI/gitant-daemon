@@ -128,19 +128,19 @@ func (h *OAuthHandler) CallbackOAuth(w http.ResponseWriter, r *http.Request) {
 	// For now, return a placeholder response
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":   "OAuth callback received (implementation pending)",
-		"provider":  provider,
-		"code":      code,
+		"message":  "OAuth callback received (implementation pending)",
+		"provider": provider,
+		"code":     code,
 	})
 }
 
 // OAuthUserInfo represents the user info from OAuth provider
 type OAuthUserInfo struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	Name        string `json:"name"`
-	Username    string `json:"login"`
-	AvatarURL   string `json:"avatar_url"`
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	Username  string `json:"login"`
+	AvatarURL string `json:"avatar_url"`
 }
 
 // generateRandomState generates a random state for CSRF protection

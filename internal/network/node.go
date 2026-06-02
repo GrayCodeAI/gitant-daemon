@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
-	"github.com/lakshmanpatel/gitant/internal/identity"
 )
 
 const (
@@ -52,16 +52,16 @@ type FederationRecord struct {
 
 // Node orchestrates libp2p host, DHT, and GossipSub for gitant.
 type Node struct {
-	mu              sync.RWMutex
-	Host            *Host
-	DHT             *DHT
-	Gossip          *GossipSub
-	PeerMgr         *PeerManager
-	cfg             NodeConfig
-	ctx             context.Context
-	cancel          context.CancelFunc
-	remoteEvents    []FederatedEvent
-	subscription    *Subscription
+	mu               sync.RWMutex
+	Host             *Host
+	DHT              *DHT
+	Gossip           *GossipSub
+	PeerMgr          *PeerManager
+	cfg              NodeConfig
+	ctx              context.Context
+	cancel           context.CancelFunc
+	remoteEvents     []FederatedEvent
+	subscription     *Subscription
 	onFederatedEvent func(FederatedEvent)
 }
 

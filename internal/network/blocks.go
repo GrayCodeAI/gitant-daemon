@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/ipfs/go-cid"
-	"github.com/multiformats/go-multihash"
 	p2pnetwork "github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/multiformats/go-multihash"
 )
 
 const BlockProtocol = protocol.ID("/gitant/block/1.0.0")

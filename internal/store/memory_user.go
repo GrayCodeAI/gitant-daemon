@@ -12,12 +12,12 @@ import (
 // MemoryUserStore is an in-memory UserStore with optional JSON file persistence.
 type MemoryUserStore struct {
 	mu            sync.RWMutex
-	users         map[string]*User    // id -> user
-	byName        map[string]string   // username -> id
-	byEmail       map[string]string   // email -> id
-	sshKeys       map[string]*SSHKey  // key_id -> ssh_key
-	byFingerprint map[string]string   // fingerprint -> key_id
-	savePath      string              // if non-empty, persist to this file
+	users         map[string]*User   // id -> user
+	byName        map[string]string  // username -> id
+	byEmail       map[string]string  // email -> id
+	sshKeys       map[string]*SSHKey // key_id -> ssh_key
+	byFingerprint map[string]string  // fingerprint -> key_id
+	savePath      string             // if non-empty, persist to this file
 }
 
 // NewMemoryUserStore creates a new MemoryUserStore.

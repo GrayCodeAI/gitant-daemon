@@ -16,18 +16,18 @@ var validOID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 // Object represents an LFS object
 type Object struct {
-	OID          string    `json:"oid"`
-	Size         int64     `json:"size"`
-	RepoID       string    `json:"repo_id"`
-	Path         string    `json:"path"`
-	CreatedAt    time.Time `json:"created_at"`
+	OID       string    `json:"oid"`
+	Size      int64     `json:"size"`
+	RepoID    string    `json:"repo_id"`
+	Path      string    `json:"path"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Store manages LFS objects
 type Store struct {
-	mu       sync.RWMutex
-	baseDir  string
-	objects  map[string]*Object // oid -> object
+	mu      sync.RWMutex
+	baseDir string
+	objects map[string]*Object // oid -> object
 }
 
 // NewStore creates a new LFS store

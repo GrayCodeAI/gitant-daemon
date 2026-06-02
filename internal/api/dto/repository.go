@@ -11,10 +11,10 @@ type Repository struct {
 
 // RepositoryListResponse is the response for listing repositories.
 type RepositoryListResponse struct {
-	Repos   []Repository `json:"repos"`
-	Total   int          `json:"total"`
-	Offset  int          `json:"offset"`
-	Limit   int          `json:"limit"`
+	Repos  []Repository `json:"repos"`
+	Total  int          `json:"total"`
+	Offset int          `json:"offset"`
+	Limit  int          `json:"limit"`
 }
 
 // CreateRepositoryRequest is the request for creating a repository.

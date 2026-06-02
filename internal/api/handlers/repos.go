@@ -209,9 +209,9 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 				Content string `json:"content"` // base64
 			} `json:"objects"`
 			RefUpdates []struct {
-				Name      string `json:"name"`
-				OldHash   string `json:"old_hash"`
-				NewHash   string `json:"new_hash"`
+				Name    string `json:"name"`
+				OldHash string `json:"old_hash"`
+				NewHash string `json:"new_hash"`
 			} `json:"ref_updates"`
 		}
 

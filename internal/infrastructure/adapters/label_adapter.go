@@ -48,8 +48,8 @@ func (a *LabelAdapter) Delete(ctx context.Context, repoID, labelID string) error
 
 func toDomainLabel(l *crdt.Label) *models.Label {
 	return &models.Label{
-		ID:     l.Name, // Labels are keyed by name
-		Name:   l.Name,
-		Color:  l.Color,
+		ID:    l.Name, // Labels are keyed by name
+		Name:  l.Name,
+		Color: l.Color,
 	}
 }

@@ -312,10 +312,10 @@ type TreeEntry struct {
 
 // CommitInfo represents commit metadata for API responses
 type CommitInfo struct {
-	Hash      string `json:"hash"`
-	Author    string `json:"author"`
-	Message   string `json:"message"`
-	TreeHash  string `json:"tree_hash"`
+	Hash         string   `json:"hash"`
+	Author       string   `json:"author"`
+	Message      string   `json:"message"`
+	TreeHash     string   `json:"tree_hash"`
 	ParentHashes []string `json:"parent_hashes"`
 }
 
@@ -331,9 +331,9 @@ func (r *Repository) WalkCommits(startHash plumbing.Hash, limit int) ([]CommitIn
 		}
 
 		info := CommitInfo{
-			Hash:    commit.Hash.String(),
-			Author:  commit.Author.String(),
-			Message: commit.Message,
+			Hash:     commit.Hash.String(),
+			Author:   commit.Author.String(),
+			Message:  commit.Message,
 			TreeHash: commit.TreeHash.String(),
 		}
 		for _, parent := range commit.ParentHashes {

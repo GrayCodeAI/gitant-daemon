@@ -16,7 +16,7 @@ import (
 
 // Store represents a SQLite-backed store
 type Store struct {
-	db     *sql.DB
+	db      *sql.DB
 	dataDir string
 }
 
@@ -50,7 +50,7 @@ func NewStore(dataDir string) (*Store, error) {
 	}
 
 	s := &Store{
-		db:     db,
+		db:      db,
 		dataDir: dataDir,
 	}
 

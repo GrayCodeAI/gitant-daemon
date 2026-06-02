@@ -23,10 +23,10 @@ var agentListCmd = &cobra.Command{
 		client := cli.NewClient(daemonURL)
 		var result struct {
 			Agents []struct {
-				DID        string  `json:"did"`
-				TrustScore float64 `json:"trust_score"`
-				RepoCount  int     `json:"repos"`
-				CommitCount int    `json:"commits"`
+				DID         string  `json:"did"`
+				TrustScore  float64 `json:"trust_score"`
+				RepoCount   int     `json:"repos"`
+				CommitCount int     `json:"commits"`
 			} `json:"agents"`
 			Total int `json:"total"`
 		}

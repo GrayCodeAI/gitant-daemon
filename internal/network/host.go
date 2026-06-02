@@ -21,10 +21,10 @@ import (
 type Host struct {
 	mu sync.RWMutex
 
-	host    host.Host
-	ctx     context.Context
-	cancel  context.CancelFunc
-	peers   map[peer.ID]peer.AddrInfo
+	host   host.Host
+	ctx    context.Context
+	cancel context.CancelFunc
+	peers  map[peer.ID]peer.AddrInfo
 }
 
 // Config holds P2P host configuration

@@ -70,7 +70,7 @@ func GetStarCount(registry *storage.RepositoryRegistry) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"stars":     entry.Stars,
+			"stars":      entry.Stars,
 			"starred_by": entry.StarredBy,
 		})
 	}

@@ -13,25 +13,25 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/lakshmanpatel/gitant/internal/api/handlers"
 	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/application/ports"
 	"github.com/lakshmanpatel/gitant/internal/application/service"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
-	"github.com/lakshmanpatel/gitant/internal/infrastructure/adapters"
 	"github.com/lakshmanpatel/gitant/internal/discussions"
 	"github.com/lakshmanpatel/gitant/internal/identity"
+	"github.com/lakshmanpatel/gitant/internal/infrastructure/adapters"
 	"github.com/lakshmanpatel/gitant/internal/network"
 	"github.com/lakshmanpatel/gitant/internal/projects"
 	"github.com/lakshmanpatel/gitant/internal/runner"
 	"github.com/lakshmanpatel/gitant/internal/search"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/store"
-	"github.com/lakshmanpatel/gitant/internal/wiki"
-	ws "github.com/lakshmanpatel/gitant/internal/websocket"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
+	ws "github.com/lakshmanpatel/gitant/internal/websocket"
+	"github.com/lakshmanpatel/gitant/internal/wiki"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Prometheus metrics.
@@ -91,8 +91,8 @@ type Server struct {
 	searchIndex     *search.Index
 
 	// Service layer (dependency injection)
-	serviceFactory  *service.ServiceFactory
-	repoService     ports.RepositoryService
+	serviceFactory *service.ServiceFactory
+	repoService    ports.RepositoryService
 }
 
 func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistry, issues *crdt.IssueStore, prs *crdt.PullRequestStore, blockstore *storage.Blockstore, labels *crdt.LabelStore, tasks *crdt.TaskStore, releases *crdt.ReleaseStore, protection *storage.ProtectionStore, webhookMgr *webhooks.Manager, revocations *identity.RevocationStore, dataDir string, corsOrigins []string) *Server {

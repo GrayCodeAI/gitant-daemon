@@ -679,4 +679,3 @@ func TestUCANListRevocationsEmpty(t *testing.T) {
 		t.Errorf("expected 'No revoked UCANs', got: %s", out)
 	}
 }
-

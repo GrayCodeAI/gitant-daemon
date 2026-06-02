@@ -26,10 +26,10 @@ type RepoEntry struct {
 
 // RepositoryRegistry manages multiple repositories
 type RepositoryRegistry struct {
-	mu       sync.RWMutex
-	baseDir  string
-	dataDir  string
-	repos    map[string]*RepoEntry
+	mu      sync.RWMutex
+	baseDir string
+	dataDir string
+	repos   map[string]*RepoEntry
 }
 
 // NewRepositoryRegistry creates a new repository registry

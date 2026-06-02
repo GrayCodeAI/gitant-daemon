@@ -18,8 +18,8 @@ type BranchProtection struct {
 
 // ProtectionStore manages branch protection rules per repository
 type ProtectionStore struct {
-	mu         sync.RWMutex
-	dataDir    string
+	mu          sync.RWMutex
+	dataDir     string
 	protections map[string][]BranchProtection // repoID -> protections
 }
 

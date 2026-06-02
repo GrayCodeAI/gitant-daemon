@@ -403,7 +403,7 @@ func TestNonceCacheReplayDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cache := NewNonceCache(5 * time.Second, "")
+	cache := NewNonceCache(5*time.Second, "")
 	defer cache.Stop()
 
 	// First use should succeed

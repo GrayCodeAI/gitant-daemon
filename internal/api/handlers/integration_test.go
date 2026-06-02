@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"

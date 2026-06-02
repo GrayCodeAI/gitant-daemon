@@ -8,13 +8,13 @@ import (
 )
 
 const (
-	peerPingInterval    = 30 * time.Second
-	peerPingTimeout     = 10 * time.Second
-	peerScoreDecay      = 0.95
-	peerScorePingBonus  = 1.0
+	peerPingInterval     = 30 * time.Second
+	peerPingTimeout      = 10 * time.Second
+	peerScoreDecay       = 0.95
+	peerScorePingBonus   = 1.0
 	peerScoreFailPenalty = -2.0
-	peerMinScore        = -10.0
-	peerMaxMissedPings  = 5
+	peerMinScore         = -10.0
+	peerMaxMissedPings   = 5
 )
 
 // PeerScore tracks a peer's reliability score.

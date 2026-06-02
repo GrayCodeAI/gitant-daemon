@@ -16,7 +16,7 @@ func TestSaveLoadJSON(t *testing.T) {
 	}
 
 	// Save
-	err := SaveJSON(path, sample{Name: "hello", Value:42})
+	err := SaveJSON(path, sample{Name: "hello", Value: 42})
 	if err != nil {
 		t.Fatalf("SaveJSON: %v", err)
 	}

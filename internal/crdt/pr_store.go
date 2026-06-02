@@ -9,9 +9,9 @@ import (
 
 // PullRequestStore manages pull requests across repositories
 type PullRequestStore struct {
-	mu  sync.RWMutex
-	prs map[string]map[string]*PullRequest // repoID -> prID -> PullRequest
-	path string                            // persistence file path
+	mu   sync.RWMutex
+	prs  map[string]map[string]*PullRequest // repoID -> prID -> PullRequest
+	path string                             // persistence file path
 }
 
 // NewPullRequestStore creates a new pull request store

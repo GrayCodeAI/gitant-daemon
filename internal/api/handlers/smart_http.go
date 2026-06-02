@@ -374,7 +374,7 @@ func (sw *sidebandWriter) Write(data []byte) (int, error) {
 		chunk := data[i:end]
 
 		// Write pkt-line: <length><channel><data>
-		length := len(chunk) + 5 // +4 for length, +1 for channel
+		length := len(chunk) + 5                   // +4 for length, +1 for channel
 		header := fmt.Sprintf("%04x%c", length, 1) // channel 1
 		if _, err := sw.w.Write([]byte(header)); err != nil {
 			return 0, err

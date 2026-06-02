@@ -80,26 +80,26 @@ type CreateRepoRequest struct {
 }
 
 type ForkRepoRequest struct {
-	SourceID    string
-	ForkName    string
-	Owner       string
+	SourceID string
+	ForkName string
+	Owner    string
 }
 
 type CreateIssueRequest struct {
-	RepoID      string
-	Title       string
-	Body        string
-	Labels      []string
-	Author      string
+	RepoID string
+	Title  string
+	Body   string
+	Labels []string
+	Author string
 }
 
 type CreatePRRequest struct {
-	RepoID        string
-	Title         string
-	Body          string
-	Author        string
-	SourceBranch  string
-	TargetBranch  string
+	RepoID       string
+	Title        string
+	Body         string
+	Author       string
+	SourceBranch string
+	TargetBranch string
 }
 
 type CreateLabelRequest struct {
@@ -116,11 +116,11 @@ type CreateTaskRequest struct {
 }
 
 type CreateReleaseRequest struct {
-	RepoID      string
-	TagName     string
-	Name        string
-	Body        string
-	Author      string
-	Draft       bool
-	Prerelease  bool
+	RepoID     string
+	TagName    string
+	Name       string
+	Body       string
+	Author     string
+	Draft      bool
+	Prerelease bool
 }

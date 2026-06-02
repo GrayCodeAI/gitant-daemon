@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 const crdtGlobalTopic = "gitant/crdt"

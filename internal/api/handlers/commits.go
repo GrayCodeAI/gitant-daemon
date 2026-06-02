@@ -135,8 +135,8 @@ func DiffCommitAllParents(registry *storage.RepositoryRegistry) http.HandlerFunc
 			changes := diffTrees(repo, plumbing.ZeroHash, commit.TreeHash)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"commit":   commitHash,
-				"parents":  []map[string]interface{}{{"hash": "root", "changes": changes, "total": len(changes)}},
+				"commit":  commitHash,
+				"parents": []map[string]interface{}{{"hash": "root", "changes": changes, "total": len(changes)}},
 			})
 			return
 		}

@@ -12,7 +12,7 @@ type visitor struct {
 }
 
 type RateLimiter struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	visitors map[string]*visitor
 	rate     float64 // tokens per second
 	burst    float64 // max tokens

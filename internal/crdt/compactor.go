@@ -149,8 +149,8 @@ func CompactLog(log *OperationLog) int {
 
 	// Deduplicate: keep the latest op per (type, entity key)
 	type opKey struct {
-		typ  OperationType
-		key  string
+		typ OperationType
+		key string
 	}
 	latest := make(map[opKey]*Operation)
 	order := make([]opKey, 0)

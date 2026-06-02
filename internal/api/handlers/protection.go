@@ -99,11 +99,11 @@ func SetProtection(store *storage.ProtectionStore) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":        true,
-			"branch":         branch,
-			"require_pr":     req.RequirePR,
+			"success":          true,
+			"branch":           branch,
+			"require_pr":       req.RequirePR,
 			"require_approval": req.RequireApproval,
-			"no_force_push":  req.NoForcePush,
+			"no_force_push":    req.NoForcePush,
 		})
 	}
 }

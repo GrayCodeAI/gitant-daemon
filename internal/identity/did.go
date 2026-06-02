@@ -31,8 +31,8 @@ type Identity struct {
 // KeyHistoryEntry records a previous key in the rotation chain.
 type KeyHistoryEntry struct {
 	PublicKey ed25519.PublicKey `json:"public_key"`
-	DID       string           `json:"did"`
-	RotatedAt time.Time        `json:"rotated_at"`
+	DID       string            `json:"did"`
+	RotatedAt time.Time         `json:"rotated_at"`
 }
 
 // NewIdentity creates a new DID:key identity
@@ -113,10 +113,10 @@ func LoadIdentity(path string) (*Identity, error) {
 
 // identityFile is the JSON-serializable representation of an Identity on disk.
 type identityFile struct {
-	PrivateKey   string            `json:"private_key"`
-	PublicKey    string            `json:"public_key"`
-	DID          string            `json:"did"`
-	PreviousKeys []keyHistoryJSON  `json:"previous_keys,omitempty"`
+	PrivateKey   string           `json:"private_key"`
+	PublicKey    string           `json:"public_key"`
+	DID          string           `json:"did"`
+	PreviousKeys []keyHistoryJSON `json:"previous_keys,omitempty"`
 }
 
 type keyHistoryJSON struct {

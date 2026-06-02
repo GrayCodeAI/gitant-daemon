@@ -278,5 +278,3 @@ func buildSigningString(r *http.Request, params map[string]string) (string, erro
 
 	return strings.Join(parts, "\n"), nil
 }
-
-

@@ -21,7 +21,7 @@ const (
 	OpSetAssignee OperationType = "set_assignee"
 
 	// Label operations
-	OpSetColor  OperationType = "set_color"
+	OpSetColor    OperationType = "set_color"
 	OpDeleteLabel OperationType = "delete_label"
 
 	// Task operations

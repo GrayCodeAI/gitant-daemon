@@ -13,9 +13,9 @@ import (
 func RegisterWebhook(manager *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			URL    string             `json:"url"`
+			URL    string               `json:"url"`
 			Events []webhooks.EventType `json:"events"`
-			Secret string             `json:"secret,omitempty"`
+			Secret string               `json:"secret,omitempty"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

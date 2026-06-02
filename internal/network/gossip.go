@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/lakshmanpatel/gitant/internal/identity"
 )
 
 // GossipSub wraps the GossipSub protocol for pub/sub messaging

@@ -9,8 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	authMiddleware "github.com/lakshmanpatel/gitant/internal/api/middleware"
-	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/lakshmanpatel/gitant/internal/application/service"
+	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/lakshmanpatel/gitant/internal/infrastructure/adapters"
 )
 

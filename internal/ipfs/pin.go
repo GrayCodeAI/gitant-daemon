@@ -10,9 +10,9 @@ import (
 
 // PinManager manages pinned content in IPFS
 type PinManager struct {
-	mu    sync.RWMutex
-	pins  map[string]cid.Cid
-	node  *Node
+	mu   sync.RWMutex
+	pins map[string]cid.Cid
+	node *Node
 }
 
 // NewPinManager creates a new PinManager

@@ -222,8 +222,8 @@ var serveCmd = &cobra.Command{
 			sshAuthorizedKeysPath, _ := cmd.Flags().GetString("ssh-authorized-keys")
 
 			sshConfig := transport.SSHConfig{
-				Port:              sshPort,
-				HostKeyPath:       sshHostKeyPath,
+				Port:               sshPort,
+				HostKeyPath:        sshHostKeyPath,
 				AuthorizedKeysPath: sshAuthorizedKeysPath,
 			}
 

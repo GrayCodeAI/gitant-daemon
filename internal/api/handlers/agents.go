@@ -17,12 +17,12 @@ import (
 
 // Agent represents a known agent in the registry
 type Agent struct {
-	DID        string    `json:"did"`
-	FirstSeen  time.Time `json:"first_seen"`
-	LastSeen   time.Time `json:"last_seen"`
-	RepoCount  int       `json:"repos"`
-	CommitCount int      `json:"commits"`
-	TrustScore float64   `json:"trust_score"`
+	DID         string    `json:"did"`
+	FirstSeen   time.Time `json:"first_seen"`
+	LastSeen    time.Time `json:"last_seen"`
+	RepoCount   int       `json:"repos"`
+	CommitCount int       `json:"commits"`
+	TrustScore  float64   `json:"trust_score"`
 }
 
 // AgentRegistry tracks known agents
@@ -292,11 +292,11 @@ func DelegateCapability(id *identity.Identity) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"token":   token,
-			"issuer":  ucan.Issuer,
+			"token":    token,
+			"issuer":   ucan.Issuer,
 			"audience": ucan.Audience,
-			"expires": ucan.Expires,
-			"caps":    ucan.Caps,
+			"expires":  ucan.Expires,
+			"caps":     ucan.Caps,
 		})
 	}
 }
@@ -313,8 +313,8 @@ func GenerateDID() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"did":        id.DID,
-			"document":   id.DIDDocument(),
+			"did":      id.DID,
+			"document": id.DIDDocument(),
 		})
 	}
 }

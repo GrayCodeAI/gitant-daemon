@@ -86,7 +86,7 @@ type PullRequest struct {
 	SourceBranch string
 	TargetBranch string
 	Labels       []string
-	Assignee     string // DID
+	Assignee     string   // DID
 	Reviewers    []string // DIDs
 	Tombstoned   bool
 	CreatedAt    time.Time

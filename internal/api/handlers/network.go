@@ -19,10 +19,10 @@ func NetworkStatus(node *network.Node) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"enabled":  true,
-			"peer_id":  node.Host.ID().String(),
-			"addrs":    node.AdvertisedAddrs(),
-			"peers":    node.PeerCount(),
+			"enabled":   true,
+			"peer_id":   node.Host.ID().String(),
+			"addrs":     node.AdvertisedAddrs(),
+			"peers":     node.PeerCount(),
 			"connected": node.PeerSummaries(),
 		})
 	}

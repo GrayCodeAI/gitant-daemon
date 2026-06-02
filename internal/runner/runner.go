@@ -31,10 +31,10 @@ var dangerousPatterns = regexp.MustCompile(`(\$\(|` + "`" + `|eval\s|exec\s|sour
 type WorkflowStatus string
 
 const (
-	StatusPending WorkflowStatus = "pending"
-	StatusRunning WorkflowStatus = "running"
-	StatusSuccess WorkflowStatus = "success"
-	StatusFailed  WorkflowStatus = "failed"
+	StatusPending  WorkflowStatus = "pending"
+	StatusRunning  WorkflowStatus = "running"
+	StatusSuccess  WorkflowStatus = "success"
+	StatusFailed   WorkflowStatus = "failed"
 	StatusCanceled WorkflowStatus = "canceled"
 )
 

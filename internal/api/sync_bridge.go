@@ -4,10 +4,10 @@ import (
 	"fmt"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/lakshmanpatel/gitant/internal/api/handlers"
 	"github.com/lakshmanpatel/gitant/internal/crdt"
 	"github.com/lakshmanpatel/gitant/internal/network"
 	"github.com/lakshmanpatel/gitant/internal/storage"
-	"github.com/lakshmanpatel/gitant/internal/api/handlers"
 )
 
 type repoObjectStore struct {
