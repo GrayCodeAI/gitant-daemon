@@ -11,21 +11,25 @@ import (
 
 // MemoryUserStore is an in-memory UserStore with optional JSON file persistence.
 type MemoryUserStore struct {
-	mu       sync.RWMutex
-	users    map[string]*User    // id -> user
-	byName   map[string]string   // username -> id
-	byEmail  map[string]string   // email -> id
-	savePath string             // if non-empty, persist to this file
+	mu            sync.RWMutex
+	users         map[string]*User    // id -> user
+	byName        map[string]string   // username -> id
+	byEmail       map[string]string   // email -> id
+	sshKeys       map[string]*SSHKey  // key_id -> ssh_key
+	byFingerprint map[string]string   // fingerprint -> key_id
+	savePath      string              // if non-empty, persist to this file
 }
 
 // NewMemoryUserStore creates a new MemoryUserStore.
 // If savePath is non-empty, data is persisted to that JSON file.
 func NewMemoryUserStore(savePath string) *MemoryUserStore {
 	s := &MemoryUserStore{
-		users:    make(map[string]*User),
-		byName:   make(map[string]string),
-		byEmail:  make(map[string]string),
-		savePath: savePath,
+		users:         make(map[string]*User),
+		byName:        make(map[string]string),
+		byEmail:       make(map[string]string),
+		sshKeys:       make(map[string]*SSHKey),
+		byFingerprint: make(map[string]string),
+		savePath:      savePath,
 	}
 	if savePath != "" {
 		s.load()
@@ -126,6 +130,62 @@ func (s *MemoryUserStore) List(_ context.Context) ([]*User, error) {
 	return users, nil
 }
 
+func (s *MemoryUserStore) AddSSHKey(_ context.Context, key *SSHKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.sshKeys[key.ID]; exists {
+		return fmt.Errorf("SSH key already exists: %s", key.ID)
+	}
+	if _, exists := s.byFingerprint[key.Fingerprint]; exists {
+		return fmt.Errorf("SSH key fingerprint already registered: %s", key.Fingerprint)
+	}
+	s.sshKeys[key.ID] = key
+	s.byFingerprint[key.Fingerprint] = key.ID
+	return s.saveLocked()
+}
+
+func (s *MemoryUserStore) DeleteSSHKey(_ context.Context, userID, keyID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, ok := s.sshKeys[keyID]
+	if !ok {
+		return fmt.Errorf("SSH key not found: %s", keyID)
+	}
+	if key.UserID != userID {
+		return fmt.Errorf("SSH key does not belong to user")
+	}
+	delete(s.byFingerprint, key.Fingerprint)
+	delete(s.sshKeys, keyID)
+	return s.saveLocked()
+}
+
+func (s *MemoryUserStore) ListSSHKeys(_ context.Context, userID string) ([]SSHKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var keys []SSHKey
+	for _, key := range s.sshKeys {
+		if key.UserID == userID {
+			keys = append(keys, *key)
+		}
+	}
+	return keys, nil
+}
+
+func (s *MemoryUserStore) FindByFingerprint(_ context.Context, fingerprint string) (*User, *SSHKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	keyID, ok := s.byFingerprint[fingerprint]
+	if !ok {
+		return nil, nil, fmt.Errorf("no user found for fingerprint: %s", fingerprint)
+	}
+	key := s.sshKeys[keyID]
+	user, ok := s.users[key.UserID]
+	if !ok {
+		return nil, nil, fmt.Errorf("user not found for key: %s", keyID)
+	}
+	return user, key, nil
+}
+
 func (s *MemoryUserStore) saveLocked() error {
 	if s.savePath == "" {
 		return nil
@@ -134,7 +194,14 @@ func (s *MemoryUserStore) saveLocked() error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating user store dir: %w", err)
 	}
-	data, err := json.MarshalIndent(s.users, "", "  ")
+	// Serialize both users and SSH keys
+	data, err := json.MarshalIndent(struct {
+		Users   map[string]*User   `json:"users"`
+		SSHKeys map[string]*SSHKey `json:"ssh_keys"`
+	}{
+		Users:   s.users,
+		SSHKeys: s.sshKeys,
+	}, "", "  ")
 	if err != nil {
 		return err
 	}

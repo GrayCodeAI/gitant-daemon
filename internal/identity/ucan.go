@@ -209,10 +209,13 @@ func actionAllowed(action string, allowed []string) bool {
 	return false
 }
 
-// generateNonce generates a random nonce
+// generateNonce generates a random nonce. Panics only if the system CSPRNG
+// fails, which is an unrecoverable system error (same as crypto/rand default).
 func generateNonce() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand.Read failed: " + err.Error())
+	}
 	return fmt.Sprintf("%x", b)
 }
 

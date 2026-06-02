@@ -147,11 +147,16 @@ func NewServer(port int, id *identity.Identity, repos *storage.RepositoryRegistr
 	s.serviceFactory = service.NewServiceFactory(
 		// RepositoryRepository interface (implemented by RepositoryAdapter)
 		adapters.NewRepositoryAdapter(s.repos),
-		nil, // TODO: create IssueRepository adapter
-		nil, // TODO: create PRRepository adapter
-		nil, // TODO: create LabelRepository adapter
-		nil, // TODO: create TaskRepository adapter
-		nil, // TODO: create ReleaseRepository adapter
+		// IssueRepository interface (implemented by IssueAdapter)
+		adapters.NewIssueAdapter(s.issues),
+		// PullRequestRepository interface (implemented by PRAdapter)
+		adapters.NewPRAdapter(s.prs),
+		// LabelRepository interface (implemented by LabelAdapter)
+		adapters.NewLabelAdapter(s.labels),
+		// TaskRepository interface (implemented by TaskAdapter)
+		adapters.NewTaskAdapter(s.tasks),
+		// ReleaseRepository interface (implemented by ReleaseAdapter)
+		adapters.NewReleaseAdapter(s.releases),
 	)
 	s.repoService = s.serviceFactory.CreateRepositoryService()
 
@@ -425,7 +430,13 @@ func extractSessionToken(r *http.Request) string {
 	if strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimPrefix(auth, "Bearer ")
 	}
-	cookie, err := r.Cookie("gitant_session")
+	// Check httpOnly session cookie first
+	cookie, err := r.Cookie("session_token")
+	if err == nil && cookie.Value != "" {
+		return cookie.Value
+	}
+	// Fall back to legacy gitant_session cookie
+	cookie, err = r.Cookie("gitant_session")
 	if err == nil {
 		return cookie.Value
 	}
@@ -681,9 +692,6 @@ func (s *Server) setupRoutes() {
 		batchHandler := handlers.NewBatchHandler(s.issues, s.prs, s.webhooks)
 		r.Post("/api/v1/batch", batchHandler.Execute)
 	})
-
-	// OpenAPI spec
-	s.router.Get("/api/v1/openapi.json", handlers.HandleOpenAPI)
 
 	// WebSocket endpoint (requires authentication)
 	if s.authService != nil {

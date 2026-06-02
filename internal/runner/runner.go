@@ -20,6 +20,9 @@ const maxScriptSize = 64 * 1024 // 64 KB
 // stepTimeout is the maximum time a single workflow step can run.
 const stepTimeout = 10 * time.Minute
 
+// maxRunDuration is the maximum time an entire workflow run can execute.
+const maxRunDuration = 30 * time.Minute
+
 // dangerousPatterns matches shell constructs that can be used for command injection
 // or privilege escalation. These are blocked in workflow scripts.
 var dangerousPatterns = regexp.MustCompile(`(\$\(|` + "`" + `|eval\s|exec\s|source\s|\.\s|nc\s|ncat\s|curl\s.*\|\s*sh|wget\s.*\|\s*sh|python\s*-c|perl\s*-e|ruby\s*-e|node\s*-e|dd\s+if=|mkfs|fdisk|mount\s|umount\s|chmod\s+777|chown\s+root)`)
@@ -146,12 +149,26 @@ func (r *Runner) executeWorkflow(ctx context.Context, repoPath string, workflow 
 	run.Status = StatusRunning
 	run.mu.Unlock()
 
+	// Enforce global timeout for the entire workflow
+	runCtx, cancel := context.WithTimeout(ctx, maxRunDuration)
+	defer cancel()
+
 	for jobName, job := range workflow.Jobs {
+		select {
+		case <-runCtx.Done():
+			run.mu.Lock()
+			run.Status = StatusCanceled
+			run.mu.Unlock()
+			run.addLog("Workflow canceled: exceeded maximum run duration")
+			return
+		default:
+		}
+
 		run.addLog(fmt.Sprintf("Starting job: %s", jobName))
 
 		for i, step := range job.Steps {
 			select {
-			case <-ctx.Done():
+			case <-runCtx.Done():
 				run.mu.Lock()
 				run.Status = StatusCanceled
 				run.mu.Unlock()
@@ -167,7 +184,7 @@ func (r *Runner) executeWorkflow(ctx context.Context, repoPath string, workflow 
 			run.addLog(fmt.Sprintf("Running: %s", stepName))
 
 			if step.Run != "" {
-				if err := r.executeStep(ctx, repoPath, step.Run, run); err != nil {
+				if err := r.executeStep(runCtx, repoPath, step.Run, run); err != nil {
 					run.addLog(fmt.Sprintf("Failed: %s - %v", stepName, err))
 					run.mu.Lock()
 					run.Status = StatusFailed
@@ -203,20 +220,30 @@ func (r *Runner) executeStep(ctx context.Context, repoPath, script string, run *
 	cmd.Dir = repoPath
 	// Sanitize environment: only pass essential vars, strip sensitive ones
 	cmd.Env = []string{
-		"PATH=" + os.Getenv("PATH"),
+		"PATH=/usr/local/bin:/usr/bin:/bin",
 		"HOME=" + os.Getenv("HOME"),
 		"LANG=en_US.UTF-8",
 		"CI=true",
 		"GITANT=true",
 	}
+	// Apply platform-specific security attributes (process groups, etc.)
+	applyProcAttr(cmd)
 
 	output, err := cmd.CombinedOutput()
 	if len(output) > 0 {
+		// Limit log output to prevent memory exhaustion
+		const maxLogSize = 1024 * 1024 // 1MB
+		if len(output) > maxLogSize {
+			output = output[:maxLogSize]
+			output = append(output, []byte("\n... [truncated] ...")...)
+		}
 		run.addLog(string(output))
 	}
 
 	if err != nil {
 		if stepCtx.Err() == context.DeadlineExceeded {
+			// Kill the entire process group on timeout
+			killProcessGroup(cmd)
 			return fmt.Errorf("step timed out after %s", stepTimeout)
 		}
 		return fmt.Errorf("step failed: %w", err)

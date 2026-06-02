@@ -97,7 +97,14 @@ func extractSessionToken(r *http.Request) string {
 		return strings.TrimPrefix(auth, "Bearer ")
 	}
 
-	cookie, err := r.Cookie("gitant_session")
+	// Check httpOnly session cookie first
+	cookie, err := r.Cookie("session_token")
+	if err == nil && cookie.Value != "" {
+		return cookie.Value
+	}
+
+	// Fall back to legacy gitant_session cookie
+	cookie, err = r.Cookie("gitant_session")
 	if err == nil {
 		return cookie.Value
 	}

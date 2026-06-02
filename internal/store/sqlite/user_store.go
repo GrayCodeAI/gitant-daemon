@@ -221,3 +221,122 @@ func (s *SQLUserStore) List(ctx context.Context) ([]*store.User, error) {
 
 	return users, nil
 }
+
+// AddSSHKey adds an SSH public key for a user
+func (s *SQLUserStore) AddSSHKey(ctx context.Context, key *store.SSHKey) error {
+	query := `
+		INSERT INTO ssh_keys (id, user_id, name, public_key, fingerprint, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`
+
+	_, err := s.db.ExecContext(ctx, query,
+		key.ID,
+		key.UserID,
+		key.Name,
+		key.PublicKey,
+		key.Fingerprint,
+		key.CreatedAt,
+	)
+
+	if err != nil {
+		return fmt.Errorf("adding SSH key: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteSSHKey removes an SSH key
+func (s *SQLUserStore) DeleteSSHKey(ctx context.Context, userID, keyID string) error {
+	query := `DELETE FROM ssh_keys WHERE id = ? AND user_id = ?`
+
+	result, err := s.db.ExecContext(ctx, query, keyID, userID)
+	if err != nil {
+		return fmt.Errorf("deleting SSH key: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("SSH key not found: %s", keyID)
+	}
+
+	return nil
+}
+
+// ListSSHKeys lists all SSH keys for a user
+func (s *SQLUserStore) ListSSHKeys(ctx context.Context, userID string) ([]store.SSHKey, error) {
+	query := `
+		SELECT id, user_id, name, public_key, fingerprint, created_at
+		FROM ssh_keys
+		WHERE user_id = ?
+		ORDER BY created_at DESC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("listing SSH keys: %w", err)
+	}
+	defer rows.Close()
+
+	var keys []store.SSHKey
+	for rows.Next() {
+		key := store.SSHKey{}
+		err := rows.Scan(
+			&key.ID,
+			&key.UserID,
+			&key.Name,
+			&key.PublicKey,
+			&key.Fingerprint,
+			&key.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning SSH key: %w", err)
+		}
+		keys = append(keys, key)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating SSH keys: %w", err)
+	}
+
+	return keys, nil
+}
+
+// FindByFingerprint finds a user by their SSH key fingerprint
+func (s *SQLUserStore) FindByFingerprint(ctx context.Context, fingerprint string) (*store.User, *store.SSHKey, error) {
+	query := `
+		SELECT u.id, u.username, u.email, u.password_hash, u.display_name, u.avatar_url, u.role, u.created_at, u.updated_at,
+		       k.id, k.user_id, k.name, k.public_key, k.fingerprint, k.created_at
+		FROM users u
+		INNER JOIN ssh_keys k ON u.id = k.user_id
+		WHERE k.fingerprint = ?
+	`
+
+	user := &store.User{}
+	key := &store.SSHKey{}
+	err := s.db.QueryRowContext(ctx, query, fingerprint).Scan(
+		&user.ID,
+		&user.Username,
+		&user.Email,
+		&user.PasswordHash,
+		&user.DisplayName,
+		&user.AvatarURL,
+		&user.Role,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+		&key.ID,
+		&key.UserID,
+		&key.Name,
+		&key.PublicKey,
+		&key.Fingerprint,
+		&key.CreatedAt,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil, fmt.Errorf("no user found for fingerprint: %s", fingerprint)
+		}
+		return nil, nil, fmt.Errorf("finding user by fingerprint: %w", err)
+	}
+
+	return user, key, nil
+}

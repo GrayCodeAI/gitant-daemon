@@ -100,9 +100,25 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		h.auth.Logout(r.Context(), token)
 	}
 
+	// Clear session cookie
+	clearSessionCookie(w)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
+	})
+}
+
+// clearSessionCookie removes the session cookie
+func clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
 	})
 }
 

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -10,10 +11,14 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/lakshmanpatel/gitant/internal/store"
 )
 
 // SSHServer handles SSH connections for git operations
@@ -23,13 +28,15 @@ type SSHServer struct {
 	wg        sync.WaitGroup
 	done      chan struct{}
 	port      int
+	userStore store.UserStore
 }
 
 // SSHConfig holds SSH server configuration
 type SSHConfig struct {
-	Port         int
-	HostKeyPath  string
+	Port               int
+	HostKeyPath        string
 	AuthorizedKeysPath string
+	UserStore          store.UserStore
 }
 
 // NewSSHServer creates a new SSH server
@@ -38,37 +45,73 @@ func NewSSHServer(config SSHConfig) (*SSHServer, error) {
 		config.Port = 2222
 	}
 
+	server := &SSHServer{
+		port:      config.Port,
+		done:      make(chan struct{}),
+		userStore: config.UserStore,
+	}
+
 	sshConfig := &ssh.ServerConfig{
 		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			// Password auth is disabled - only key-based auth
 			return nil, fmt.Errorf("password authentication not supported")
 		},
 		PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			// TODO: Implement authorized_keys check
-			// For now, accept all keys for testing
-			slog.Info("SSH public key auth", "user", c.User(), "fingerprint", ssh.FingerprintSHA256(key))
-			return &ssh.Permissions{}, nil
+			return server.authenticatePublicKey(c, key)
 		},
 	}
+
+	server.sshConfig = sshConfig
 
 	// Generate or load host key
 	if err := setupHostKey(config.HostKeyPath, sshConfig); err != nil {
 		return nil, fmt.Errorf("setting up host key: %w", err)
 	}
 
-	server := &SSHServer{
-		sshConfig: sshConfig,
-		port:      config.Port,
-		done:      make(chan struct{}),
+	return server, nil
+}
+
+// authenticatePublicKey validates an SSH public key against registered user keys.
+func (s *SSHServer) authenticatePublicKey(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	if s.userStore == nil {
+		slog.Warn("SSH auth: no user store configured, rejecting key",
+			"user", c.User(), "fingerprint", ssh.FingerprintSHA256(key))
+		return nil, fmt.Errorf("SSH authentication not configured")
 	}
 
-	return server, nil
+	fingerprint := ssh.FingerprintSHA256(key)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	user, _, err := s.userStore.FindByFingerprint(ctx, fingerprint)
+	if err != nil {
+		slog.Warn("SSH auth: unknown key",
+			"user", c.User(), "fingerprint", fingerprint)
+		return nil, fmt.Errorf("unknown SSH key")
+	}
+
+	slog.Info("SSH public key auth", "user", user.Username, "fingerprint", fingerprint)
+
+	// Store the authenticated user ID in permissions extensions for downstream use
+	return &ssh.Permissions{
+		Extensions: map[string]string{
+			"user-id":  user.ID,
+			"username": user.Username,
+		},
+	}, nil
 }
 
 // setupHostKey generates or loads the SSH host key
 func setupHostKey(hostKeyPath string, config *ssh.ServerConfig) error {
 	if hostKeyPath == "" {
-		hostKeyPath = "/tmp/gitant_host_key"
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("getting home directory: %w", err)
+		}
+		hostKeyPath = filepath.Join(home, ".gitant", "ssh_host_key")
+		if err := os.MkdirAll(filepath.Dir(hostKeyPath), 0700); err != nil {
+			return fmt.Errorf("creating host key directory: %w", err)
+		}
 	}
 
 	// Check if key exists
@@ -177,7 +220,17 @@ func (s *SSHServer) handleConnection(conn net.Conn) {
 	}
 	defer sshConn.Close()
 
-	slog.Info("SSH connection established", "user", sshConn.User(), "remote", sshConn.RemoteAddr())
+	// Extract authenticated user from permissions
+	userID := ""
+	username := sshConn.User()
+	if sshConn.Permissions != nil && sshConn.Permissions.Extensions != nil {
+		userID = sshConn.Permissions.Extensions["user-id"]
+		if u := sshConn.Permissions.Extensions["username"]; u != "" {
+			username = u
+		}
+	}
+
+	slog.Info("SSH connection established", "user", username, "user_id", userID, "remote", sshConn.RemoteAddr())
 
 	// Discard global requests
 	go ssh.DiscardRequests(reqs)
@@ -195,7 +248,7 @@ func (s *SSHServer) handleConnection(conn net.Conn) {
 			continue
 		}
 
-		go s.handleSession(channel, requests, sshConn.User())
+		go s.handleSession(channel, requests, username)
 	}
 }
 
@@ -253,6 +306,11 @@ func (s *SSHServer) handleGitCommand(channel ssh.Channel, cmd string, username s
 		// Extract repo name from path
 		repoName := strings.TrimPrefix(parts[1], "/")
 		repoName = strings.TrimSuffix(repoName, ".git")
+		if !isSafeRepoName(repoName) {
+			slog.Error("Invalid repository name in SSH command", "repoName", repoName)
+			fmt.Fprintf(channel, "fatal: invalid repository name\n")
+			return
+		}
 		execCmd = exec.Command("git", "upload-pack", "--stateless-rpc", "--advertise-refs", fmt.Sprintf("/tmp/git-repos/%s", repoName))
 
 	case "git-receive-pack":
@@ -262,6 +320,11 @@ func (s *SSHServer) handleGitCommand(channel ssh.Channel, cmd string, username s
 		}
 		repoName := strings.TrimPrefix(parts[1], "/")
 		repoName = strings.TrimSuffix(repoName, ".git")
+		if !isSafeRepoName(repoName) {
+			slog.Error("Invalid repository name in SSH command", "repoName", repoName)
+			fmt.Fprintf(channel, "fatal: invalid repository name\n")
+			return
+		}
 		execCmd = exec.Command("git", "receive-pack", "--stateless-rpc", fmt.Sprintf("/tmp/git-repos/%s", repoName))
 
 	default:
@@ -278,6 +341,28 @@ func (s *SSHServer) handleGitCommand(channel ssh.Channel, cmd string, username s
 	if err := execCmd.Run(); err != nil {
 		slog.Error("Git command failed", "cmd", cmd, "error", err)
 	}
+}
+
+// isSafeRepoName validates that a repository name doesn't contain path traversal or special characters
+func isSafeRepoName(name string) bool {
+	if name == "" {
+		return false
+	}
+	// Reject path traversal attempts
+	if strings.Contains(name, "..") || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return false
+	}
+	// Reject null bytes
+	if strings.ContainsRune(name, 0) {
+		return false
+	}
+	// Only allow alphanumeric, hyphens, underscores, and dots
+	for _, r := range name {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' && r != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 // Stop stops the SSH server

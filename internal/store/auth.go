@@ -60,8 +60,12 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput) (*User,
 	}
 
 	now := time.Now()
+	userID, err := generateID()
+	if err != nil {
+		return nil, fmt.Errorf("generating user ID: %w", err)
+	}
 	user := &User{
-		ID:           generateID(),
+		ID:           userID,
 		Username:     input.Username,
 		Email:        input.Email,
 		PasswordHash: string(hash),
@@ -99,10 +103,19 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*Session, er
 		return nil, fmt.Errorf("invalid credentials")
 	}
 
+	sessionID, err := generateID()
+	if err != nil {
+		return nil, fmt.Errorf("generating session ID: %w", err)
+	}
+	token, err := generateToken()
+	if err != nil {
+		return nil, fmt.Errorf("generating session token: %w", err)
+	}
+
 	session := &Session{
-		ID:        generateID(),
+		ID:        sessionID,
 		UserID:    user.ID,
-		Token:     generateToken(),
+		Token:     token,
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 		CreatedAt: time.Now(),
 	}
@@ -144,18 +157,18 @@ func (s *AuthService) CleanupSessions(ctx context.Context) error {
 	return s.sessions.DeleteExpired(ctx)
 }
 
-func generateID() string {
+func generateID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand.Read failed: " + err.Error())
+		return "", fmt.Errorf("generating ID: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
-func generateToken() string {
+func generateToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand.Read failed: " + err.Error())
+		return "", fmt.Errorf("generating token: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }

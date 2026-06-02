@@ -149,6 +149,10 @@ type UserStore interface {
 	Update(ctx context.Context, user *User) error
 	Delete(ctx context.Context, id string) error
 	List(ctx context.Context) ([]*User, error)
+	AddSSHKey(ctx context.Context, key *SSHKey) error
+	DeleteSSHKey(ctx context.Context, userID, keyID string) error
+	ListSSHKeys(ctx context.Context, userID string) ([]SSHKey, error)
+	FindByFingerprint(ctx context.Context, fingerprint string) (*User, *SSHKey, error)
 }
 
 // User represents a user
@@ -160,8 +164,19 @@ type User struct {
 	DisplayName  string
 	AvatarURL    string
 	Role         string
+	SSHKeys      []SSHKey
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+// SSHKey represents a user's SSH public key
+type SSHKey struct {
+	ID          string
+	UserID      string
+	Name        string
+	Fingerprint string
+	PublicKey   string
+	CreatedAt   time.Time
 }
 
 // SessionStore defines the interface for session storage

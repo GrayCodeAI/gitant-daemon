@@ -45,25 +45,40 @@ func (f *ServiceFactory) CreateRepositoryService() ports.RepositoryService {
 
 // CreateIssueService returns a service implementation.
 func (f *ServiceFactory) CreateIssueService() ports.IssueService {
-	return nil // TODO: implement issue service
+	if f.issueRepo == nil {
+		return nil
+	}
+	return NewIssueService(f.issueRepo)
 }
 
 // CreatePRService returns a service implementation.
 func (f *ServiceFactory) CreatePRService() ports.PRService {
-	return nil // TODO: implement PR service
+	if f.prRepo == nil {
+		return nil
+	}
+	return NewPRService(f.prRepo)
 }
 
 // CreateLabelService returns a service implementation.
 func (f *ServiceFactory) CreateLabelService() ports.LabelService {
-	return nil // TODO: implement label service
+	if f.labelRepo == nil {
+		return nil
+	}
+	return NewLabelService(f.labelRepo)
 }
 
 // CreateTaskService returns a service implementation.
 func (f *ServiceFactory) CreateTaskService() ports.TaskService {
-	return nil // TODO: implement task service
+	if f.taskRepo == nil {
+		return nil
+	}
+	return NewTaskService(f.taskRepo)
 }
 
 // CreateReleaseService returns a service implementation.
 func (f *ServiceFactory) CreateReleaseService() ports.ReleaseService {
-	return nil // TODO: implement release service
+	if f.releaseRepo == nil {
+		return nil
+	}
+	return NewReleaseService(f.releaseRepo)
 }

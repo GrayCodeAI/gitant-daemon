@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/application/ports"
 	"github.com/lakshmanpatel/gitant/internal/domain/models"
 	"github.com/lakshmanpatel/gitant/internal/storage"
@@ -43,8 +44,15 @@ func CreateRepo(repoService ports.RepositoryService, wm *webhooks.Manager) http.
 			return
 		}
 
-		// Extract owner from auth context (simplified for now)
-		owner := "unknown" // TODO: extract from auth
+		owner := middleware.GetIdentity(r)
+		if owner == "" {
+			if user := middleware.GetUser(r); user != nil {
+				owner = user.ID
+			}
+		}
+		if owner == "" {
+			owner = "anonymous"
+		}
 
 		repo, err := repoService.CreateRepository(r.Context(), ports.CreateRepoRequest{
 			Name:        req.Name,
