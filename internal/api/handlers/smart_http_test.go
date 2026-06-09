@@ -286,6 +286,76 @@ func TestReceivePackConcurrentPushesExactlyOneWins(t *testing.T) {
 	}
 }
 
+func TestPushPackfileFastForwardAdvancesTip(t *testing.T) {
+	reg := setupReceivePackRepo(t)
+	protection := setupTestProtectionStore(t)
+	repo := openTestRepo(t, reg, "repo")
+	base := createTestCommit(t, repo, "base.txt", "base", nil)
+	fastForward := createTestCommit(t, repo, "next.txt", "next", []plumbing.Hash{base.Commit})
+	if err := repo.UpdateRef("refs/heads/main", base.Commit); err != nil {
+		t.Fatal(err)
+	}
+
+	result := postPushPackfile(t, reg, protection, base.Commit, fastForward.Commit)
+	if !result.Success || len(result.Errors) != 0 {
+		t.Fatalf("expected push-packfile fast-forward to succeed, got success=%v errors=%v", result.Success, result.Errors)
+	}
+	refs := listRefsByName(t, reg, "repo")
+	if refs["refs/heads/main"] != fastForward.Commit.String() {
+		t.Fatalf("expected fast-forward to advance main to %s, got %q", fastForward.Commit, refs["refs/heads/main"])
+	}
+}
+
+func TestPushPackfileConcurrentPushesExactlyOneWins(t *testing.T) {
+	reg := setupReceivePackRepo(t)
+	protection := setupTestProtectionStore(t)
+	repo := openTestRepo(t, reg, "repo")
+	base := createTestCommit(t, repo, "base.txt", "base", nil)
+	left := createTestCommit(t, repo, "left.txt", "left", []plumbing.Hash{base.Commit})
+	right := createTestCommit(t, repo, "right.txt", "right", []plumbing.Hash{base.Commit})
+	if err := repo.UpdateRef("refs/heads/main", base.Commit); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan pushPackfileResult, 2)
+	var wg sync.WaitGroup
+	for _, next := range []plumbing.Hash{left.Commit, right.Commit} {
+		wg.Add(1)
+		go func(next plumbing.Hash) {
+			defer wg.Done()
+			<-start
+			results <- postPushPackfile(t, reg, protection, base.Commit, next)
+		}(next)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	okCount := 0
+	ngCount := 0
+	var winner string
+	for result := range results {
+		if result.Success {
+			okCount++
+			winner = result.NewHash
+			continue
+		}
+		for _, err := range result.Errors {
+			if strings.Contains(err, "refs/heads/main non-fast-forward") {
+				ngCount++
+			}
+		}
+	}
+	if okCount != 1 || ngCount != 1 {
+		t.Fatalf("expected exactly one ok and one non-fast-forward ng, got ok=%d ng=%d", okCount, ngCount)
+	}
+	refs := listRefsByName(t, reg, "repo")
+	if refs["refs/heads/main"] != winner {
+		t.Fatalf("expected final main ref to equal winner %s, got %q", winner, refs["refs/heads/main"])
+	}
+}
+
 const zeroHash = "0000000000000000000000000000000000000000"
 
 type commitFixture struct {
@@ -340,6 +410,32 @@ func postReceivePack(t *testing.T, reg *storage.RepositoryRegistry, protection *
 		t.Fatalf("expected receive-pack status 200, got %d: %s", w.Code, w.Body.String())
 	}
 	return w
+}
+
+type pushPackfileResult struct {
+	Success bool
+	Errors  []string
+	NewHash string
+}
+
+func postPushPackfile(t *testing.T, reg *storage.RepositoryRegistry, protection *storage.ProtectionStore, oldHash, newHash plumbing.Hash) pushPackfileResult {
+	t.Helper()
+	r := chiRouter()
+	r.Post("/{id}/push-packfile", PushPackfile(reg, protection, setupTestWebhookManager(t)))
+	body := fmt.Sprintf(`{"ref_updates":[{"name":"refs/heads/main","old_hash":"%s","new_hash":"%s"}]}`, oldHash, newHash)
+	req := httptest.NewRequest("POST", "/repo/push-packfile", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected push-packfile status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var result pushPackfileResult
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode push-packfile response: %v", err)
+	}
+	result.NewHash = newHash.String()
+	return result
 }
 
 func decodeTestSidebandPackfile(t *testing.T, data []byte) []byte {

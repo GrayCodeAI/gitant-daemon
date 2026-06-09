@@ -12,6 +12,7 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/api/middleware"
 	"github.com/lakshmanpatel/gitant/internal/application/ports"
 	"github.com/lakshmanpatel/gitant/internal/domain/models"
+	"github.com/lakshmanpatel/gitant/internal/git"
 	"github.com/lakshmanpatel/gitant/internal/storage"
 	"github.com/lakshmanpatel/gitant/internal/store"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
@@ -202,6 +203,12 @@ func DeleteRepo(registry *storage.RepositoryRegistry, wm *webhooks.Manager) http
 	}
 }
 
+type pushRefUpdateRequest struct {
+	Name    string `json:"name"`
+	OldHash string `json:"old_hash"`
+	NewHash string `json:"new_hash"`
+}
+
 // PushObjects pushes objects to a repository
 func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.ProtectionStore, wm *webhooks.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -220,11 +227,7 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 				Type    string `json:"type"`
 				Content string `json:"content"` // base64
 			} `json:"objects"`
-			RefUpdates []struct {
-				Name    string `json:"name"`
-				OldHash string `json:"old_hash"`
-				NewHash string `json:"new_hash"`
-			} `json:"ref_updates"`
+			RefUpdates []pushRefUpdateRequest `json:"ref_updates"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -232,27 +235,7 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 			return
 		}
 
-		// Check branch protection rules before allowing ref updates
-		for _, update := range req.RefUpdates {
-			branch := update.Name
-			if len(branch) > 11 && branch[:11] == "refs/heads/" {
-				branch = branch[11:]
-			}
-			protection := protectionStore.Get(id, branch)
-			if protection != nil {
-				if protection.NoForcePush {
-					// Check if this is a force push (old hash doesn't match current ref)
-					if update.OldHash != "" && update.OldHash != "0000000000000000000000000000000000000000" {
-						// Verify old hash matches current ref to detect force push
-						currentRef, err := repo.GetBranch(branch)
-						if err == nil && currentRef.String() != update.OldHash {
-							http.Error(w, "force push rejected: branch '"+branch+"' is protected", http.StatusForbidden)
-							return
-						}
-					}
-				}
-			}
-		}
+		updates := makePushRefUpdates(req.RefUpdates)
 
 		// Store objects
 		var errors []string
@@ -281,14 +264,10 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 			}
 		}
 
-		// Update refs
-		for _, update := range req.RefUpdates {
-			if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
-				hash := plumbing.NewHash(update.NewHash)
-				if err := repo.CreateBranch(update.Name, hash); err != nil {
-					slog.Warn("failed to create branch", "branch", update.Name, "error", err)
-					errors = append(errors, "failed to update ref "+update.Name)
-				}
+		statuses := applyReceivePackUpdates(registry, id, updates, protectionStore)
+		for _, status := range statuses {
+			if !status.OK {
+				errors = append(errors, status.RefName+" "+status.Reason)
 			}
 		}
 
@@ -300,12 +279,7 @@ func PushObjects(registry *storage.RepositoryRegistry, protectionStore *storage.
 				"errors":  errors,
 			})
 		} else {
-			refHeads := make(map[string]string)
-			for _, update := range req.RefUpdates {
-				if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
-					refHeads[update.Name] = update.NewHash
-				}
-			}
+			refHeads := successfulRefHeads(statuses)
 			dispatchPushEvent(wm, id, objectHashes, refHeads)
 
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -328,12 +302,8 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 		}
 
 		var req struct {
-			Packfile   string `json:"packfile"` // base64-encoded packfile
-			RefUpdates []struct {
-				Name    string `json:"name"`
-				OldHash string `json:"old_hash"`
-				NewHash string `json:"new_hash"`
-			} `json:"ref_updates"`
+			Packfile   string                 `json:"packfile"` // base64-encoded packfile
+			RefUpdates []pushRefUpdateRequest `json:"ref_updates"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -341,23 +311,7 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 			return
 		}
 
-		// Check branch protection rules
-		for _, update := range req.RefUpdates {
-			branch := update.Name
-			if len(branch) > 11 && branch[:11] == "refs/heads/" {
-				branch = branch[11:]
-			}
-			protection := protectionStore.Get(id, branch)
-			if protection != nil && protection.NoForcePush {
-				if update.OldHash != "" && update.OldHash != "0000000000000000000000000000000000000000" {
-					currentRef, err := repo.GetBranch(branch)
-					if err == nil && currentRef.String() != update.OldHash {
-						http.Error(w, "force push rejected: branch '"+branch+"' is protected", http.StatusForbidden)
-						return
-					}
-				}
-			}
-		}
+		updates := makePushRefUpdates(req.RefUpdates)
 
 		// Decode and ingest packfile
 		objectHashes := make([]string, 0)
@@ -382,24 +336,15 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 			}
 		}
 
-		// Update refs
+		statuses := applyReceivePackUpdates(registry, id, updates, protectionStore)
 		var errors []string
-		for _, update := range req.RefUpdates {
-			if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
-				hash := plumbing.NewHash(update.NewHash)
-				if err := repo.CreateBranch(update.Name, hash); err != nil {
-					slog.Warn("failed to create branch", "branch", update.Name, "error", err)
-					errors = append(errors, "failed to update ref "+update.Name)
-				}
+		for _, status := range statuses {
+			if !status.OK {
+				errors = append(errors, status.RefName+" "+status.Reason)
 			}
 		}
 
-		refHeads := make(map[string]string)
-		for _, update := range req.RefUpdates {
-			if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
-				refHeads[update.Name] = update.NewHash
-			}
-		}
+		refHeads := successfulRefHeads(statuses)
 		dispatchPushEvent(wm, id, objectHashes, refHeads)
 
 		w.Header().Set("Content-Type", "application/json")
@@ -416,6 +361,32 @@ func PushPackfile(registry *storage.RepositoryRegistry, protectionStore *storage
 			})
 		}
 	}
+}
+
+func makePushRefUpdates(updates []pushRefUpdateRequest) []git.PushRefUpdate {
+	result := make([]git.PushRefUpdate, 0, len(updates))
+	for _, update := range updates {
+		oldHash := update.OldHash
+		if oldHash == "" {
+			oldHash = "0000000000000000000000000000000000000000"
+		}
+		result = append(result, git.PushRefUpdate{
+			RefName: update.Name,
+			OldHash: oldHash,
+			NewHash: update.NewHash,
+		})
+	}
+	return result
+}
+
+func successfulRefHeads(statuses []receivePackRefStatus) map[string]string {
+	refHeads := make(map[string]string)
+	for _, status := range statuses {
+		if status.OK && status.NewHash != "" && status.NewHash != "0000000000000000000000000000000000000000" {
+			refHeads[status.RefName] = status.NewHash
+		}
+	}
+	return refHeads
 }
 
 // CloneRepo clones a repository
