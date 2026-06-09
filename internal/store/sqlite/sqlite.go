@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	_ "modernc.org/sqlite"
 
@@ -63,6 +64,28 @@ func NewStore(dataDir string) (*Store, error) {
 	return s, nil
 }
 
+func resolveMigrationsDir() (string, error) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", fmt.Errorf("resolving migrations path: caller information unavailable")
+	}
+	packageDir := filepath.Dir(sourceFile)
+	candidates := []string{
+		filepath.Join(packageDir, "migrations"),
+		filepath.Join("internal", "store", "sqlite", "migrations"),
+	}
+	for _, candidate := range candidates {
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			return "", fmt.Errorf("resolving migrations path: %w", err)
+		}
+		if info, err := os.Stat(abs); err == nil && info.IsDir() {
+			return abs, nil
+		}
+	}
+	return "", fmt.Errorf("migration directory not found")
+}
+
 // runMigrations runs database migrations
 func (s *Store) runMigrations() error {
 	driver, err := sqlite.WithInstance(s.db, &sqlite.Config{})
@@ -70,9 +93,12 @@ func (s *Store) runMigrations() error {
 		return fmt.Errorf("creating SQLite migration driver: %w", err)
 	}
 
-	// Use file:// source for migrations
-	// The path is relative to the module root
-	migrationsPath := "file://internal/store/sqlite/migrations"
+	// Use file:// source for migrations.
+	migrationsDir, err := resolveMigrationsDir()
+	if err != nil {
+		return err
+	}
+	migrationsPath := "file://" + migrationsDir
 
 	fileDriver := &file.File{}
 	src, err := fileDriver.Open(migrationsPath)

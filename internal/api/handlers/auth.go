@@ -44,6 +44,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setSessionCookie(w, session.Token, session.ExpiresAt)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -80,6 +82,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setSessionCookie(w, session.Token, session.ExpiresAt)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"user": map[string]interface{}{
@@ -109,6 +113,17 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func setSessionCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  expiresAt,
+	})
+}
+
 // clearSessionCookie removes the session cookie
 func clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
@@ -116,8 +131,7 @@ func clearSessionCookie(w http.ResponseWriter) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
 }
@@ -204,7 +218,11 @@ func extractToken(r *http.Request) string {
 	if len(auth) > 7 && auth[:7] == "Bearer " {
 		return auth[7:]
 	}
-	cookie, err := r.Cookie("gitant_session")
+	cookie, err := r.Cookie("session_token")
+	if err == nil && cookie.Value != "" {
+		return cookie.Value
+	}
+	cookie, err = r.Cookie("gitant_session")
 	if err == nil {
 		return cookie.Value
 	}
