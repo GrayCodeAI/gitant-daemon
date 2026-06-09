@@ -27,3 +27,4 @@ coverage/
 # Env / secrets
 .env*
 !.env.example
+.env.local

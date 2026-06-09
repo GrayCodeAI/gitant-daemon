@@ -54,31 +54,38 @@ type RefLine struct {
 	Name string
 }
 
-// ParseWantLines parses "want <hash>" lines from a git-upload-pack request
+// ParseWantLines parses "want <hash>" lines from a git-upload-pack request.
 func ParseWantLines(data []string) []string {
 	var hashes []string
 	for _, line := range data {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "want ") {
-			hashes = append(hashes, strings.TrimPrefix(line, "want "))
+			hashes = append(hashes, firstProtocolToken(strings.TrimPrefix(line, "want ")))
 		}
 	}
 	return hashes
 }
 
-// ParseHaveLines parses "have <hash>" lines
+// ParseHaveLines parses "have <hash>" lines.
 func ParseHaveLines(data []string) []string {
 	var hashes []string
 	for _, line := range data {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "have ") {
-			hashes = append(hashes, strings.TrimPrefix(line, "have "))
+			hashes = append(hashes, firstProtocolToken(strings.TrimPrefix(line, "have ")))
 		}
 	}
 	return hashes
 }
 
-// ParsePushRefUpdates parses ref update lines from git-receive-pack
+func firstProtocolToken(value string) string {
+	if token, _, ok := strings.Cut(value, " "); ok {
+		return token
+	}
+	return value
+}
+
+// ParsePushRefUpdates parses ref update lines from git-receive-pack.
 // Format: "<old-hash> <new-hash> <refname>"
 func ParsePushRefUpdates(data []string) []PushRefUpdate {
 	var updates []PushRefUpdate
@@ -86,10 +93,11 @@ func ParsePushRefUpdates(data []string) []PushRefUpdate {
 		line = strings.TrimSpace(line)
 		parts := strings.SplitN(line, " ", 3)
 		if len(parts) == 3 {
+			refName, _, _ := strings.Cut(parts[2], "\000")
 			updates = append(updates, PushRefUpdate{
 				OldHash: parts[0],
 				NewHash: parts[1],
-				RefName: parts[2],
+				RefName: refName,
 			})
 		}
 	}

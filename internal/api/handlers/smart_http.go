@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -127,7 +128,7 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 			return
 		}
 
-		lines := parsePktLines(string(body))
+		lines, packData := parseReceivePackRequest(body)
 		if len(lines) == 0 {
 			http.Error(w, "empty request", http.StatusBadRequest)
 			return
@@ -135,40 +136,16 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 
 		// Parse ref updates (before the packfile)
 		var updates []git.PushRefUpdate
-		packStart := -1
-		for i, line := range lines {
-			if strings.HasPrefix(line, "PACK") {
-				packStart = i
-				break
-			}
+		for _, line := range lines {
 			if u := git.ParsePushRefUpdates([]string{line}); len(u) > 0 {
 				updates = append(updates, u...)
 			}
 		}
 
-		// Check branch protection rules before accepting push
-		for _, update := range updates {
-			branch := update.RefName
-			if len(branch) > 11 && branch[:11] == "refs/heads/" {
-				branch = branch[11:]
-			}
-			protection := protectionStore.Get(id, branch)
-			if protection != nil && protection.NoForcePush {
-				if update.OldHash != "" && update.OldHash != "0000000000000000000000000000000000000000" {
-					currentRef, err := repo.GetBranch(branch)
-					if err == nil && currentRef.String() != update.OldHash {
-						http.Error(w, "force push rejected: branch '"+branch+"' is protected", http.StatusForbidden)
-						return
-					}
-				}
-			}
-		}
-
 		// Ingest packfile if present
 		objectHashes := make([]string, 0)
-		if packStart >= 0 {
-			packData := strings.Join(lines[packStart:], "")
-			hashes, err := ingestPackfile(repo, []byte(packData))
+		if len(packData) > 0 {
+			hashes, err := ingestPackfile(repo, packData)
 			if err != nil {
 				slog.Error("error ingesting packfile", "error", err)
 			} else {
@@ -176,19 +153,7 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 			}
 		}
 
-		// Update refs
-		for _, update := range updates {
-			if update.NewHash == "0000000000000000000000000000000000000000" {
-				if err := repo.DeleteRef(update.RefName); err != nil {
-					slog.Warn("failed to delete ref", "ref", update.RefName, "error", err)
-				}
-				continue
-			}
-			hash := plumbing.NewHash(update.NewHash)
-			if err := repo.UpdateRef(update.RefName, hash); err != nil {
-				slog.Warn("failed to update ref", "ref", update.RefName, "error", err)
-			}
-		}
+		statuses := applyReceivePackUpdates(registry, id, updates, protectionStore)
 
 		// Send response
 		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
@@ -196,20 +161,182 @@ func GitReceivePack(registry *storage.RepositoryRegistry, protectionStore *stora
 
 		var response strings.Builder
 		response.WriteString(git.PktLine("unpack ok\n"))
-		for _, update := range updates {
-			response.WriteString(git.PktLinef("ok %s\n", update.RefName))
+		for _, status := range statuses {
+			if status.OK {
+				response.WriteString(git.PktLinef("ok %s\n", status.RefName))
+			} else {
+				response.WriteString(git.PktLinef("ng %s %s\n", status.RefName, status.Reason))
+			}
 		}
 		response.WriteString(git.FlushPacket())
 		w.Write([]byte(response.String()))
 
 		refHeads := make(map[string]string)
-		for _, update := range updates {
-			if update.NewHash != "" && update.NewHash != "0000000000000000000000000000000000000000" {
-				refHeads[update.RefName] = update.NewHash
+		for _, status := range statuses {
+			if status.OK && status.NewHash != "" && status.NewHash != "0000000000000000000000000000000000000000" {
+				refHeads[status.RefName] = status.NewHash
 			}
 		}
 		dispatchPushEvent(wm, id, objectHashes, refHeads)
 	}
+}
+
+type receivePackRefStatus struct {
+	RefName string
+	NewHash string
+	OK      bool
+	Reason  string
+}
+
+func applyReceivePackUpdates(registry *storage.RepositoryRegistry, repoID string, updates []git.PushRefUpdate, protectionStore *storage.ProtectionStore) []receivePackRefStatus {
+	statuses := make([]receivePackRefStatus, len(updates))
+	var wg sync.WaitGroup
+	for i, update := range updates {
+		wg.Add(1)
+		go func(i int, update git.PushRefUpdate) {
+			defer wg.Done()
+			statuses[i] = applyReceivePackUpdate(registry, repoID, update, protectionStore)
+		}(i, update)
+	}
+	wg.Wait()
+	return statuses
+}
+
+func applyReceivePackUpdate(registry *storage.RepositoryRegistry, repoID string, update git.PushRefUpdate, protectionStore *storage.ProtectionStore) receivePackRefStatus {
+	status := receivePackRefStatus{RefName: update.RefName, NewHash: update.NewHash}
+	repo, err := registry.Open(repoID)
+	if err != nil {
+		status.Reason = "repository not found"
+		return status
+	}
+	if reason := validateReceivePackUpdate(repo, repoID, update, protectionStore); reason != "" {
+		status.Reason = reason
+		return status
+	}
+
+	if update.NewHash == "0000000000000000000000000000000000000000" {
+		err = repo.DeleteRefIfMatches(update.RefName, update.OldHash)
+	} else {
+		err = repo.UpdateRefIfMatches(update.RefName, update.OldHash, plumbing.NewHash(update.NewHash))
+	}
+	if err != nil {
+		status.Reason = "non-fast-forward"
+		slog.Warn("failed to apply receive-pack ref update", "ref", update.RefName, "error", err)
+	} else {
+		status.OK = true
+	}
+	return status
+}
+
+func validateReceivePackUpdate(repo *storage.Repository, repoID string, update git.PushRefUpdate, protectionStore *storage.ProtectionStore) string {
+	if update.RefName == "" || update.OldHash == "" || update.NewHash == "" {
+		return "invalid ref update"
+	}
+	if update.NewHash == "0000000000000000000000000000000000000000" && protectedBranch(repoID, update.RefName, protectionStore) != "" {
+		return "protected branch deletion denied"
+	}
+	current, exists, err := currentReceivePackRef(repo, update.RefName)
+	if err != nil {
+		return "cannot read current ref"
+	}
+	if update.OldHash == "0000000000000000000000000000000000000000" {
+		if exists {
+			return "non-fast-forward"
+		}
+		return ""
+	}
+	if !exists || current != update.OldHash {
+		return "non-fast-forward"
+	}
+	if branch := protectedBranch(repoID, update.RefName, protectionStore); branch != "" && !isReceivePackFastForward(repo, update.OldHash, update.NewHash) {
+		return "non-fast-forward"
+	}
+	return ""
+}
+
+func currentReceivePackRef(repo *storage.Repository, name string) (string, bool, error) {
+	hash, err := repo.GetRef(name)
+	if err != nil {
+		if strings.Contains(err.Error(), "reference not found") || strings.Contains(err.Error(), "not found") {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return hash.String(), true, nil
+}
+
+func protectedBranch(repoID, refName string, protectionStore *storage.ProtectionStore) string {
+	if protectionStore == nil || !strings.HasPrefix(refName, "refs/heads/") {
+		return ""
+	}
+	branch := strings.TrimPrefix(refName, "refs/heads/")
+	protection := protectionStore.Get(repoID, branch)
+	if protection == nil {
+		return ""
+	}
+	return branch
+}
+
+func isReceivePackFastForward(repo *storage.Repository, oldHash, newHash string) bool {
+	if oldHash == newHash {
+		return true
+	}
+	oldCommit, err := repo.GetCommit(plumbing.NewHash(oldHash))
+	if err != nil {
+		return false
+	}
+	newCommit, err := repo.GetCommit(plumbing.NewHash(newHash))
+	if err != nil {
+		return false
+	}
+	if oldCommit == nil || newCommit == nil {
+		return false
+	}
+
+	seen := make(map[string]bool)
+	stack := []plumbing.Hash{plumbing.NewHash(newHash)}
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if current.String() == oldHash {
+			return true
+		}
+		if seen[current.String()] {
+			continue
+		}
+		seen[current.String()] = true
+		commit, err := repo.GetCommit(current)
+		if err != nil {
+			continue
+		}
+		stack = append(stack, commit.ParentHashes...)
+	}
+	return false
+}
+
+func parseReceivePackRequest(body []byte) ([]string, []byte) {
+	var lines []string
+	for i := 0; i < len(body); {
+		if i+4 > len(body) {
+			break
+		}
+		lengthHex := string(body[i : i+4])
+		if lengthHex == "0000" {
+			i += 4
+			if i+4 <= len(body) && string(body[i:i+4]) == "PACK" {
+				return lines, body[i:]
+			}
+			continue
+		}
+		var length int
+		fmt.Sscanf(lengthHex, "%x", &length)
+		if length < 4 || i+length > len(body) {
+			break
+		}
+		lines = append(lines, string(body[i+4:i+length]))
+		i += length
+	}
+	return lines, nil
 }
 
 // parsePktLines extracts data from pkt-line format
@@ -236,31 +363,18 @@ func parsePktLines(data string) []string {
 	return lines
 }
 
-// collectObjectsForWants collects all objects reachable from wants but not from haves
+// collectObjectsForWants collects all objects reachable from wants but not from haves.
 func collectObjectsForWants(repo *storage.Repository, wants, haves []string) []plumbing.Hash {
-	// For MVP, return all objects reachable from wants
-	var objects []plumbing.Hash
 	seen := make(map[string]bool)
-
-	for _, want := range wants {
-		hash := plumbing.NewHash(want)
-		collectReachableObjects(repo, hash, seen, &objects)
-	}
-
-	// Remove haves
-	haveSet := make(map[string]bool)
 	for _, have := range haves {
-		haveSet[have] = true
+		collectReachableObjects(repo, plumbing.NewHash(have), seen, nil)
 	}
 
-	var filtered []plumbing.Hash
-	for _, obj := range objects {
-		if !haveSet[obj.String()] {
-			filtered = append(filtered, obj)
-		}
+	var objects []plumbing.Hash
+	for _, want := range wants {
+		collectReachableObjects(repo, plumbing.NewHash(want), seen, &objects)
 	}
-
-	return filtered
+	return objects
 }
 
 // collectReachableObjects walks the object graph
@@ -269,7 +383,9 @@ func collectReachableObjects(repo *storage.Repository, hash plumbing.Hash, seen 
 		return
 	}
 	seen[hash.String()] = true
-	*objects = append(*objects, hash)
+	if objects != nil {
+		*objects = append(*objects, hash)
+	}
 
 	// Try to get the object to find references
 	objType, content, err := repo.GetObject(hash)
@@ -291,24 +407,12 @@ func collectReachableObjects(repo *storage.Repository, hash plumbing.Hash, seen 
 			}
 		}
 	case plumbing.TreeObject:
-		// Parse tree entries
-		// Tree format: "<mode> <name>\0<20-byte-hash>" repeated
-		i := 0
-		for i < len(content) {
-			// Find null byte
-			nullIdx := -1
-			for j := i; j < len(content); j++ {
-				if content[j] == 0 {
-					nullIdx = j
-					break
-				}
-			}
-			if nullIdx == -1 || nullIdx+21 > len(content) {
-				break
-			}
-			entryHash := plumbing.NewHash(string(content[nullIdx+1 : nullIdx+21]))
-			collectReachableObjects(repo, entryHash, seen, objects)
-			i = nullIdx + 21
+		tree, err := repo.GetTree(hash)
+		if err != nil {
+			return
+		}
+		for _, entry := range tree.Entries {
+			collectReachableObjects(repo, entry.Hash, seen, objects)
 		}
 	}
 }

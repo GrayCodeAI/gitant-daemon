@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-git/go-git/v6"
@@ -10,6 +11,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
+
+var refUpdateLocks sync.Map
 
 type Repository struct {
 	repo *git.Repository
@@ -200,6 +203,31 @@ func (r *Repository) CreateBranch(name string, commitHash plumbing.Hash) error {
 
 // UpdateRef creates or moves a ref to a commit hash.
 func (r *Repository) UpdateRef(name string, commitHash plumbing.Hash) error {
+	return r.UpdateRefIfMatches(name, "", commitHash)
+}
+
+// UpdateRefIfMatches creates or moves a ref only when its current value matches expectedOldHash.
+// An empty expectedOldHash preserves UpdateRef's historical unconditional behavior.
+func (r *Repository) UpdateRefIfMatches(name, expectedOldHash string, commitHash plumbing.Hash) error {
+	unlock := r.lockRef(name)
+	defer unlock()
+
+	if expectedOldHash != "" {
+		current, exists, err := r.currentRefHash(name)
+		if err != nil {
+			return err
+		}
+		if isZeroHash(expectedOldHash) {
+			if exists {
+				return fmt.Errorf("non-fast-forward: expected new ref, current is %s", current)
+			}
+		} else if !exists {
+			return fmt.Errorf("non-fast-forward: expected %s, ref does not exist", expectedOldHash)
+		} else if current != expectedOldHash {
+			return fmt.Errorf("non-fast-forward: expected %s, current is %s", expectedOldHash, current)
+		}
+	}
+
 	ref := plumbing.NewHashReference(refName(name), commitHash)
 	return r.repo.Storer.SetReference(ref)
 }
@@ -211,14 +239,44 @@ func (r *Repository) DeleteBranch(name string) error {
 
 // DeleteRef removes a git ref (branch or tag).
 func (r *Repository) DeleteRef(name string) error {
+	return r.DeleteRefIfMatches(name, "")
+}
+
+// DeleteRefIfMatches removes a git ref only when its current value matches expectedOldHash.
+// An empty expectedOldHash preserves DeleteRef's historical unconditional behavior.
+func (r *Repository) DeleteRefIfMatches(name, expectedOldHash string) error {
+	unlock := r.lockRef(name)
+	defer unlock()
+
+	if expectedOldHash != "" {
+		current, exists, err := r.currentRefHash(name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if isZeroHash(expectedOldHash) {
+				return fmt.Errorf("ref does not exist")
+			}
+			return fmt.Errorf("non-fast-forward: expected %s, ref does not exist", expectedOldHash)
+		}
+		if current != expectedOldHash {
+			return fmt.Errorf("non-fast-forward: expected %s, current is %s", expectedOldHash, current)
+		}
+	}
+
 	return r.repo.Storer.RemoveReference(refName(name))
 }
 
 // GetBranch returns the commit hash a branch points to
 func (r *Repository) GetBranch(name string) (plumbing.Hash, error) {
+	return r.GetRef(name)
+}
+
+// GetRef returns the hash a ref points to.
+func (r *Repository) GetRef(name string) (plumbing.Hash, error) {
 	ref, err := r.repo.Reference(refName(name), true)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("getting branch: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("getting ref: %w", err)
 	}
 	return ref.Hash(), nil
 }
@@ -471,12 +529,39 @@ func (r *Repository) ListAllRefs() ([]RefInfo, error) {
 
 	var result []RefInfo
 	refs.ForEach(func(ref *plumbing.Reference) error {
+		name := ref.Name().String()
+		if !strings.HasPrefix(name, "refs/heads/") && !strings.HasPrefix(name, "refs/tags/") {
+			return nil
+		}
 		result = append(result, RefInfo{
-			Name: ref.Name().String(),
+			Name: name,
 			Hash: ref.Hash().String(),
 		})
 		return nil
 	})
 
 	return result, nil
+}
+
+func (r *Repository) lockRef(name string) func() {
+	key := r.path + ":" + refName(name).String()
+	value, _ := refUpdateLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func (r *Repository) currentRefHash(name string) (string, bool, error) {
+	ref, err := r.repo.Reference(refName(name), true)
+	if err == plumbing.ErrReferenceNotFound {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("getting ref: %w", err)
+	}
+	return ref.Hash().String(), true, nil
+}
+
+func isZeroHash(hash string) bool {
+	return hash == "0000000000000000000000000000000000000000"
 }
