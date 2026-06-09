@@ -1,12 +1,14 @@
 package identity
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -273,8 +275,124 @@ func (i *Identity) String() string {
 }
 
 // didWebClient is the HTTP client used for did:web resolution.
-// Uses a short timeout to prevent hanging on unresponsive servers.
-var didWebClient = &http.Client{Timeout: 10 * time.Second}
+// Uses a short timeout and validates every dial and redirect target to prevent SSRF.
+var didWebClient = newDIDWebClient()
+
+func newDIDWebClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("invalid did:web dial address %q: %w", address, err)
+		}
+		ip, err := resolveSafeDIDWebDialIP(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+	}
+
+	return &http.Client{
+		Timeout:       10 * time.Second,
+		Transport:     transport,
+		CheckRedirect: didWebRedirectPolicy,
+	}
+}
+
+func didWebRedirectPolicy(req *http.Request, _ []*http.Request) error {
+	if req.URL == nil {
+		return fmt.Errorf("redirect target is missing URL")
+	}
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("did:web redirect target must use https")
+	}
+	return validateDIDWebHost(req.URL.Hostname())
+}
+
+func validateDIDWebHost(host string) error {
+	host = normalizeDIDWebHost(host)
+	if host == "" {
+		return fmt.Errorf("did:web host is required")
+	}
+	if strings.EqualFold(host, "localhost") {
+		return fmt.Errorf("did:web host resolves to an internal address: %s", host)
+	}
+	if !isAllowedDIDWebHost(host) {
+		return fmt.Errorf("did:web host is not allowlisted: %s", host)
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedDIDWebIP(ip) {
+			return fmt.Errorf("did:web host resolves to an internal address: %s", ip.String())
+		}
+		return nil
+	}
+
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return nil
+	}
+	for _, ip := range ips {
+		if isBlockedDIDWebIP(ip) {
+			return fmt.Errorf("did:web host resolves to an internal address: %s -> %s", host, ip.String())
+		}
+	}
+	return nil
+}
+
+func resolveSafeDIDWebDialIP(ctx context.Context, host string) (net.IP, error) {
+	host = normalizeDIDWebHost(host)
+	if err := validateDIDWebHost(host); err != nil {
+		return nil, err
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip, nil
+	}
+
+	resolver := net.DefaultResolver
+	ips, err := resolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, fmt.Errorf("resolving did:web host %s: %w", host, err)
+	}
+	for _, ip := range ips {
+		if !isBlockedDIDWebIP(ip) {
+			return ip, nil
+		}
+	}
+	return nil, fmt.Errorf("did:web host resolves only to internal addresses: %s", host)
+}
+
+func normalizeDIDWebHost(host string) string {
+	host = strings.TrimSpace(host)
+	if splitHost, _, err := net.SplitHostPort(host); err == nil {
+		host = splitHost
+	}
+	return strings.Trim(host, "[]")
+}
+
+func isAllowedDIDWebHost(host string) bool {
+	allowlist := strings.TrimSpace(os.Getenv("GITANT_DID_WEB_ALLOWLIST"))
+	if allowlist == "" {
+		return true
+	}
+	for _, allowed := range strings.Split(allowlist, ",") {
+		allowed = strings.ToLower(strings.TrimSpace(allowed))
+		if allowed == "" {
+			continue
+		}
+		host = strings.ToLower(strings.TrimSuffix(host, "."))
+		allowed = strings.TrimSuffix(allowed, ".")
+		if host == allowed || strings.HasSuffix(host, "."+allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBlockedDIDWebIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
 
 // ResolveDIDWeb resolves a did:web identifier by fetching the DID document
 // from the corresponding HTTPS well-known endpoint.
@@ -301,6 +419,10 @@ func ResolveDIDWeb(did string) (map[string]interface{}, error) {
 	host := parts[0]
 	// did:web uses percent-encoding for port numbers (e.g., example.com%3A8080)
 	host = strings.ReplaceAll(host, "%3A", ":")
+	host = strings.ReplaceAll(host, "%3a", ":")
+	if err := validateDIDWebHost(host); err != nil {
+		return nil, err
+	}
 
 	var url string
 	if len(parts) == 1 {

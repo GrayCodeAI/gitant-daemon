@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -712,6 +713,22 @@ func TestResolveDID(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &result)
 	if result["id"] != did {
 		t.Fatalf("expected id=%s, got %v", did, result["id"])
+	}
+}
+
+func TestResolveDIDWebInternalHostReturnsBadGateway(t *testing.T) {
+	r := chiRouter()
+	r.Get("/resolve/{did}", ResolveDID())
+
+	req := httptest.NewRequest("GET", "/resolve/did:web:127.0.0.1%253A7777", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "internal address") {
+		t.Fatalf("expected SSRF rejection error, got %q", w.Body.String())
 	}
 }
 

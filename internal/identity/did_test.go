@@ -1,8 +1,12 @@
 package identity
 
 import (
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -241,4 +245,121 @@ func TestKeyRotationSaveLoad(t *testing.T) {
 	if !loaded.VerifyWithHistory(message, originalSig) {
 		t.Fatal("expected old signature to verify after reload")
 	}
+}
+
+func TestResolveDIDWebBlocksInternalHostsBeforeFetch(t *testing.T) {
+	tests := []string{
+		"did:web:localhost",
+		"did:web:127.0.0.1%3A7777",
+		"did:web:127.0.0.1%3a7777",
+		"did:web:::1",
+		"did:web:10.0.0.1",
+		"did:web:172.16.0.1",
+		"did:web:192.168.1.1",
+		"did:web:169.254.169.254",
+	}
+
+	for _, did := range tests {
+		t.Run(did, func(t *testing.T) {
+			var called atomic.Bool
+			oldClient := didWebClient
+			didWebClient = &http.Client{
+				Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					called.Store(true)
+					return nil, nil
+				}),
+			}
+			t.Cleanup(func() { didWebClient = oldClient })
+
+			if _, err := ResolveDIDWeb(did); err == nil {
+				t.Fatal("expected internal did:web host to be rejected")
+			}
+			if called.Load() {
+				t.Fatal("expected internal did:web host to be rejected before any outbound fetch")
+			}
+		})
+	}
+}
+
+func TestResolveDIDWebRejectsRedirectsToInternalHosts(t *testing.T) {
+	did := "did:web:example.com"
+	var internalFetches atomic.Int32
+	oldClient := didWebClient
+	didWebClient = &http.Client{
+		CheckRedirect: didWebRedirectPolicy,
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Hostname() == "127.0.0.1" {
+				internalFetches.Add(1)
+			}
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"https://127.0.0.1/.well-known/did.json"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    req,
+			}, nil
+		}),
+	}
+	t.Cleanup(func() { didWebClient = oldClient })
+
+	if _, err := ResolveDIDWeb(did); err == nil {
+		t.Fatal("expected redirect to internal host to be rejected")
+	}
+	if internalFetches.Load() != 0 {
+		t.Fatal("expected redirect target not to be fetched")
+	}
+}
+
+func TestResolveDIDWebRejectsHostOutsideAllowlist(t *testing.T) {
+	t.Setenv("GITANT_DID_WEB_ALLOWLIST", "example.com")
+	var called atomic.Bool
+	oldClient := didWebClient
+	didWebClient = &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			called.Store(true)
+			return nil, nil
+		}),
+	}
+	t.Cleanup(func() { didWebClient = oldClient })
+
+	if _, err := ResolveDIDWeb("did:web:example.org"); err == nil {
+		t.Fatal("expected non-allowlisted did:web host to be rejected")
+	}
+	if called.Load() {
+		t.Fatal("expected non-allowlisted did:web host to be rejected before any outbound fetch")
+	}
+}
+
+func TestResolveDIDWebAllowsSafePublicHost(t *testing.T) {
+	t.Setenv("GITANT_DID_WEB_ALLOWLIST", "example.com")
+	did := "did:web:example.com:user:alice"
+	oldClient := didWebClient
+	didWebClient = &http.Client{
+		CheckRedirect: didWebRedirectPolicy,
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.String() != "https://example.com/user/alice/did.json" {
+				t.Fatalf("unexpected resolve URL: %s", req.URL.String())
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"id":"did:web:example.com:user:alice"}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+	t.Cleanup(func() { didWebClient = oldClient })
+
+	doc, err := ResolveDIDWeb(did)
+	if err != nil {
+		t.Fatalf("expected safe public did:web to resolve: %v", err)
+	}
+	if doc["id"] != did {
+		t.Fatalf("expected document id %s, got %v", did, doc["id"])
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }
