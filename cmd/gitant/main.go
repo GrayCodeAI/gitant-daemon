@@ -34,6 +34,7 @@ var rootCmd = &cobra.Command{
 type serveSQLiteStores struct {
 	AuthService       *store.AuthService
 	RepoCollaborators store.RepoCollaboratorStore
+	ReviewComments    store.ReviewCommentStore
 	Close             func()
 }
 
@@ -52,6 +53,7 @@ func newServeSQLiteStores(dataStoreDir string) (*serveSQLiteStores, error) {
 	return &serveSQLiteStores{
 		AuthService:       store.NewAuthService(sqliteStore.NewUserStore(), sqliteStore.NewSessionStore()),
 		RepoCollaborators: sqliteStore.NewRepoCollaboratorStore(),
+		ReviewComments:    sqliteStore.NewReviewCommentStore(),
 		Close:             closeFn,
 	}, nil
 }
@@ -203,6 +205,7 @@ var serveCmd = &cobra.Command{
 		defer serveStores.Close()
 		server.SetRepoCollaboratorStore(serveStores.RepoCollaborators)
 		server.SetAuthService(serveStores.AuthService)
+		server.SetReviewStore(serveStores.ReviewComments)
 
 		p2pEnabled, _ := cmd.Flags().GetBool("p2p")
 		if envP2P := os.Getenv("GITANT_P2P"); envP2P != "" {

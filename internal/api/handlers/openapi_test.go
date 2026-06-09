@@ -52,11 +52,49 @@ func TestOpenAPISpecIncludesCollaboratorManagementRoutes(t *testing.T) {
 	assertRepoWriteSecurity(t, remove)
 }
 
+func TestOpenAPISpecIncludesReviewCommentRoutes(t *testing.T) {
+	spec := GenerateOpenAPISpec("http://localhost:7777")
+
+	list := pathOperation(t, spec, "/api/v1/repos/{id}/prs/{prId}/review", "get")
+	if summary, _ := list["summary"].(string); summary != "List PR review comments" {
+		t.Fatalf("unexpected review comment list summary: %q", summary)
+	}
+
+	create := pathOperation(t, spec, "/api/v1/repos/{id}/prs/{prId}/review", "post")
+	if summary, _ := create["summary"].(string); summary != "Create PR review comment" {
+		t.Fatalf("unexpected review comment create summary: %q", summary)
+	}
+	assertRepoWriteSecurity(t, create)
+
+	resolve := pathOperation(t, spec, "/api/v1/review-comments/{commentId}/resolve", "post")
+	if summary, _ := resolve["summary"].(string); summary != "Resolve review comment" {
+		t.Fatalf("unexpected review comment resolve summary: %q", summary)
+	}
+	assertBearerSecurity(t, resolve)
+
+	remove := pathOperation(t, spec, "/api/v1/review-comments/{commentId}", "delete")
+	if summary, _ := remove["summary"].(string); summary != "Delete review comment" {
+		t.Fatalf("unexpected review comment delete summary: %q", summary)
+	}
+	assertBearerSecurity(t, remove)
+}
+
 func assertRepoWriteSecurity(t *testing.T, op map[string]interface{}) {
 	t.Helper()
 	security, ok := op["security"].([]map[string][]string)
 	if !ok || len(security) == 0 || len(security[0]["bearerAuth"]) == 0 || security[0]["bearerAuth"][0] != "repo:write" {
 		t.Fatalf("operation should document write security, got %#v", op["security"])
+	}
+}
+
+func assertBearerSecurity(t *testing.T, op map[string]interface{}) {
+	t.Helper()
+	security, ok := op["security"].([]map[string][]string)
+	if !ok || len(security) == 0 {
+		t.Fatalf("operation should document bearer security, got %#v", op["security"])
+	}
+	if _, ok := security[0]["bearerAuth"]; !ok {
+		t.Fatalf("operation should document bearerAuth security, got %#v", op["security"])
 	}
 }
 

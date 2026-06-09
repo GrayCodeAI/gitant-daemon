@@ -51,6 +51,7 @@ func (h *ReviewHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		authorID = user.ID
 	}
 
+	now := time.Now()
 	comment := &store.ReviewComment{
 		ID:         generateID("rc"),
 		PRID:       prID,
@@ -60,6 +61,8 @@ func (h *ReviewHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		Body:       req.Body,
 		ParentID:   req.ParentID,
 		Status:     "open",
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 
 	if err := h.comments.Create(r.Context(), comment); err != nil {
@@ -78,6 +81,7 @@ func (h *ReviewHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		"body":        comment.Body,
 		"parent_id":   comment.ParentID,
 		"status":      comment.Status,
+		"resolved":    comment.Status == "resolved",
 		"created_at":  comment.CreatedAt.Format(time.RFC3339),
 	})
 }
@@ -103,6 +107,7 @@ func (h *ReviewHandler) ListComments(w http.ResponseWriter, r *http.Request) {
 			"body":        c.Body,
 			"parent_id":   c.ParentID,
 			"status":      c.Status,
+			"resolved":    c.Status == "resolved",
 			"created_at":  c.CreatedAt.Format(time.RFC3339),
 			"updated_at":  c.UpdatedAt.Format(time.RFC3339),
 		}

@@ -16,6 +16,16 @@ type SQLReviewCommentStore struct {
 
 // Create creates a new review comment
 func (s *SQLReviewCommentStore) Create(ctx context.Context, comment *store.ReviewComment) error {
+	if comment.CreatedAt.IsZero() {
+		comment.CreatedAt = time.Now()
+	}
+	if comment.UpdatedAt.IsZero() {
+		comment.UpdatedAt = comment.CreatedAt
+	}
+	if comment.Status == "" {
+		comment.Status = "open"
+	}
+
 	query := `
 		INSERT INTO review_comments (id, pr_id, repo_id, file_path, line_number, author_id, body, parent_id, status, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -125,10 +135,11 @@ func (s *SQLReviewCommentStore) Update(ctx context.Context, comment *store.Revie
 		WHERE id = ?
 	`
 
+	comment.UpdatedAt = time.Now()
 	_, err := s.db.ExecContext(ctx, query,
 		comment.Body,
 		comment.Status,
-		time.Now(),
+		comment.UpdatedAt,
 		comment.ID,
 	)
 
@@ -147,11 +158,14 @@ func (s *SQLReviewCommentStore) Resolve(ctx context.Context, id string) error {
 		WHERE id = ?
 	`
 
-	_, err := s.db.ExecContext(ctx, query, time.Now(), id)
+	result, err := s.db.ExecContext(ctx, query, time.Now(), id)
 	if err != nil {
 		return fmt.Errorf("resolving review comment: %w", err)
 	}
-
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("review comment not found: %s", id)
+	}
 	return nil
 }
 
@@ -159,10 +173,13 @@ func (s *SQLReviewCommentStore) Resolve(ctx context.Context, id string) error {
 func (s *SQLReviewCommentStore) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM review_comments WHERE id = ?`
 
-	_, err := s.db.ExecContext(ctx, query, id)
+	result, err := s.db.ExecContext(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("deleting review comment: %w", err)
 	}
-
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("review comment not found: %s", id)
+	}
 	return nil
 }

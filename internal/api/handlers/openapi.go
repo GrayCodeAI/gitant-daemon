@@ -267,6 +267,83 @@ func GenerateOpenAPISpec(baseURL string) *OpenAPISpec {
 					},
 				},
 			},
+			"/api/v1/repos/{id}/prs/{prId}/review": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary":     "List PR review comments",
+					"description": "Lists inline review comments for a pull request.",
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+						{"name": "prId", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "List of review comments"},
+						"404": map[string]interface{}{"description": "Repository or pull request not found"},
+					},
+				},
+				"post": map[string]interface{}{
+					"summary":     "Create PR review comment",
+					"description": "Creates an inline review comment on a pull request. Requires repository write capability via a verified UCAN or session owner/collaborator membership.",
+					"security":    []map[string][]string{{"bearerAuth": []string{"repo:write"}}},
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+						{"name": "prId", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"schema": map[string]interface{}{
+									"type": "object",
+									"properties": map[string]interface{}{
+										"file_path":   map[string]string{"type": "string"},
+										"line_number": map[string]string{"type": "integer"},
+										"body":        map[string]string{"type": "string"},
+										"parent_id":   map[string]string{"type": "string"},
+									},
+									"required": []string{"file_path", "body"},
+								},
+							},
+						},
+					},
+					"responses": map[string]interface{}{
+						"201": map[string]interface{}{"description": "Review comment created"},
+						"400": map[string]interface{}{"description": "Invalid request"},
+						"401": map[string]interface{}{"description": "Authentication required"},
+						"403": map[string]interface{}{"description": "Write capability or session owner/collaborator membership required"},
+						"404": map[string]interface{}{"description": "Repository or pull request not found"},
+					},
+				},
+			},
+			"/api/v1/review-comments/{commentId}/resolve": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary":     "Resolve review comment",
+					"description": "Marks an inline review comment as resolved. Requires authentication.",
+					"security":    []map[string][]string{{"bearerAuth": []string{}}},
+					"parameters": []map[string]interface{}{
+						{"name": "commentId", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Review comment resolved"},
+						"401": map[string]interface{}{"description": "Authentication required"},
+						"404": map[string]interface{}{"description": "Review comment not found"},
+					},
+				},
+			},
+			"/api/v1/review-comments/{commentId}": map[string]interface{}{
+				"delete": map[string]interface{}{
+					"summary":     "Delete review comment",
+					"description": "Deletes an inline review comment. Requires authentication.",
+					"security":    []map[string][]string{{"bearerAuth": []string{}}},
+					"parameters": []map[string]interface{}{
+						{"name": "commentId", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Review comment deleted"},
+						"401": map[string]interface{}{"description": "Authentication required"},
+						"404": map[string]interface{}{"description": "Review comment not found"},
+					},
+				},
+			},
 			"/api/v1/auth/register": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Register user",

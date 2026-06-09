@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -325,9 +327,57 @@ func (s *Server) registerAuthRoutes() {
 	s.router.Get("/api/v1/auth/oauth/{provider}/callback", oauthHandler.CallbackOAuth)
 }
 
-// SetReviewStore sets the review comment store
+// SetReviewStore sets the review comment store and registers review comment routes.
 func (s *Server) SetReviewStore(reviewStore store.ReviewCommentStore) {
 	s.reviewStore = reviewStore
+	s.registerReviewRoutes()
+}
+
+func (s *Server) registerReviewRoutes() {
+	if s.reviewStore == nil {
+		return
+	}
+
+	reviewHandler := handlers.NewReviewHandler(s.reviewStore)
+	s.router.Route("/api/v1/repos/{id}/prs/{prId}/review", func(r chi.Router) {
+		r.Get("/", reviewHandler.ListComments)
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware.RequireIdentity)
+			r.Use(func(next http.Handler) http.Handler {
+				return handlers.RequireRepoReadAccessWithCollaborators(s.repos, s.identity.DID, s)(next)
+			})
+			r.Use(func(next http.Handler) http.Handler {
+				return authMiddleware.RequireRepoWrite("id", s)(next)
+			})
+			r.Post("/", s.reviewPostDispatcher(reviewHandler))
+		})
+	})
+	s.router.Group(func(r chi.Router) {
+		r.Use(authMiddleware.RequireIdentity)
+		r.Post("/api/v1/review-comments/{commentId}/resolve", reviewHandler.ResolveComment)
+		r.Delete("/api/v1/review-comments/{commentId}", reviewHandler.DeleteComment)
+	})
+}
+
+func (s *Server) reviewPostDispatcher(reviewHandler *handlers.ReviewHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		var payload struct {
+			Verdict string `json:"verdict"`
+		}
+		if err := json.Unmarshal(body, &payload); err == nil && payload.Verdict != "" {
+			handlers.ReviewPR(s.prs, s.webhooks)(w, r)
+			return
+		}
+
+		reviewHandler.CreateComment(w, r)
+	}
 }
 
 func (s *Server) resolveCollaboratorUser(ctx context.Context, userID, username string) (*store.User, error) {
@@ -611,7 +661,6 @@ func (s *Server) setupRoutes() {
 			r.Post("/{id}/issues/{issueId}/comment", handlers.CommentIssue(s.issues, s.webhooks))
 			r.Post("/{id}/issues/{issueId}/close", handlers.CloseIssue(s.issues, s.webhooks))
 			r.Post("/{id}/prs", handlers.OpenPR(s.prs, s.webhooks))
-			r.Post("/{id}/prs/{prId}/review", handlers.ReviewPR(s.prs, s.webhooks))
 			r.Post("/{id}/prs/{prId}/merge", handlers.MergePR(s.prs, s.repos, s.protection, s.webhooks))
 			r.Post("/{id}/branches", handlers.CreateBranch(s.repos))
 			r.Post("/{id}/labels", handlers.CreateLabel(s.labels, s.webhooks))
@@ -673,22 +722,8 @@ func (s *Server) setupRoutes() {
 
 	// Auth endpoints - now registered in registerAuthRoutes() which is called via SetAuthService()
 
-	// Review comment endpoints
-	if s.reviewStore != nil {
-		reviewHandler := handlers.NewReviewHandler(s.reviewStore)
-		s.router.Route("/api/v1/repos/{id}/prs/{prId}/review", func(r chi.Router) {
-			r.Get("/", reviewHandler.ListComments)
-			r.Group(func(r chi.Router) {
-				r.Use(authMiddleware.RequireIdentity)
-				r.Post("/", reviewHandler.CreateComment)
-			})
-		})
-		s.router.Group(func(r chi.Router) {
-			r.Use(authMiddleware.RequireIdentity)
-			r.Post("/api/v1/review-comments/{commentId}/resolve", reviewHandler.ResolveComment)
-			r.Delete("/api/v1/review-comments/{commentId}", reviewHandler.DeleteComment)
-		})
-	}
+	// Review comment endpoints are registered by SetReviewStore after the
+	// durable SQLite store is available in serve.
 
 	// Discussion endpoints
 	discussionHandler := handlers.NewDiscussionHandler(s.discussionStore)
