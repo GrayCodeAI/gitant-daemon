@@ -82,6 +82,7 @@ type Server struct {
 	pinner          network.ObjectPinner
 	authService     *store.AuthService
 	reviewStore     store.ReviewCommentStore
+	repoACLStore    store.RepoCollaboratorStore
 	runner          *runner.Runner
 	wsHub           *ws.Hub
 	dataDir         string
@@ -329,6 +330,51 @@ func (s *Server) SetReviewStore(reviewStore store.ReviewCommentStore) {
 	s.reviewStore = reviewStore
 }
 
+// SetRepoCollaboratorStore sets the repo ownership and collaborator store.
+func (s *Server) SetRepoCollaboratorStore(repoACLStore store.RepoCollaboratorStore) {
+	s.repoACLStore = repoACLStore
+}
+
+// Add records a repository owner or collaborator membership.
+func (s *Server) Add(ctx context.Context, collaborator *store.RepoCollaborator) error {
+	if s.repoACLStore == nil {
+		return fmt.Errorf("repo collaborator store unavailable")
+	}
+	return s.repoACLStore.Add(ctx, collaborator)
+}
+
+// Get returns a repository owner or collaborator membership.
+func (s *Server) Get(ctx context.Context, repoID, userID string) (*store.RepoCollaborator, error) {
+	if s.repoACLStore == nil {
+		return nil, fmt.Errorf("repo collaborator store unavailable")
+	}
+	return s.repoACLStore.Get(ctx, repoID, userID)
+}
+
+// ListByRepo lists repository owner and collaborator memberships.
+func (s *Server) ListByRepo(ctx context.Context, repoID string) ([]*store.RepoCollaborator, error) {
+	if s.repoACLStore == nil {
+		return nil, fmt.Errorf("repo collaborator store unavailable")
+	}
+	return s.repoACLStore.ListByRepo(ctx, repoID)
+}
+
+// Remove deletes a repository owner or collaborator membership.
+func (s *Server) Remove(ctx context.Context, repoID, userID string) error {
+	if s.repoACLStore == nil {
+		return fmt.Errorf("repo collaborator store unavailable")
+	}
+	return s.repoACLStore.Remove(ctx, repoID, userID)
+}
+
+// IsWriter reports whether a user owns or collaborates on the repository.
+func (s *Server) IsWriter(ctx context.Context, repoID, userID string) (bool, error) {
+	if s.repoACLStore == nil {
+		return false, fmt.Errorf("repo collaborator store unavailable")
+	}
+	return s.repoACLStore.IsWriter(ctx, repoID, userID)
+}
+
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -483,11 +529,15 @@ func (s *Server) setupRoutes() {
 	// Repository endpoints
 	s.router.Route("/api/v1/repos", func(r chi.Router) {
 		// List all repos (public ones visible to all)
-		r.Get("/", handlers.ListRepos(s.repoService, s.identity.DID))
+		r.Get("/", func(w http.ResponseWriter, req *http.Request) {
+			handlers.ListRepos(s.repoService, s.identity.DID, s)(w, req)
+		})
 
 		// Public read-only (private repos require auth)
 		r.Group(func(r chi.Router) {
-			r.Use(handlers.RequireRepoReadAccess(s.repos, s.identity.DID))
+			r.Use(func(next http.Handler) http.Handler {
+				return handlers.RequireRepoReadAccessWithCollaborators(s.repos, s.identity.DID, s)(next)
+			})
 			r.Get("/{id}", handlers.GetRepo(s.repoService))
 			r.Get("/{id}/stars", handlers.GetStarCount(s.repos))
 			r.Get("/{id}/clone", handlers.CloneRepo(s.repos))
@@ -519,14 +569,20 @@ func (s *Server) setupRoutes() {
 		// Authenticated mutating endpoints (repo creation — no repo id yet)
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware.RequireIdentity)
-			r.Post("/", handlers.CreateRepo(s.repoService, s.webhooks))
+			r.Post("/", func(w http.ResponseWriter, req *http.Request) {
+				handlers.CreateRepo(s.repoService, s.webhooks, s)(w, req)
+			})
 		})
 
-		// Repo-scoped mutating endpoints (UCAN write capability enforced)
+		// Repo-scoped mutating endpoints (UCAN write or session owner/collaborator enforced)
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware.RequireIdentity)
-			r.Use(handlers.RequireRepoReadAccess(s.repos, s.identity.DID))
-			r.Use(authMiddleware.RequireRepoWriteCapability("id"))
+			r.Use(func(next http.Handler) http.Handler {
+				return handlers.RequireRepoReadAccessWithCollaborators(s.repos, s.identity.DID, s)(next)
+			})
+			r.Use(func(next http.Handler) http.Handler {
+				return authMiddleware.RequireRepoWrite("id", s)(next)
+			})
 			r.Delete("/{id}", handlers.DeleteRepo(s.repos, s.webhooks))
 			r.Post("/{id}/fork", handlers.ForkRepo(s.repos, s.webhooks, s.identity.DID))
 			r.Post("/{id}/star", handlers.StarRepo(s.repos))

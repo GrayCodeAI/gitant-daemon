@@ -62,7 +62,8 @@ func GenerateOpenAPISpec(baseURL string) *OpenAPISpec {
 				},
 				"post": map[string]interface{}{
 					"summary":     "Create repository",
-					"description": "Creates a new repository",
+					"description": "Creates a new repository for an authenticated UCAN/HTTP-signature identity or session user. Session-created repositories record the session user as owner.",
+					"security":    []map[string][]string{{"bearerAuth": []string{}}},
 					"requestBody": map[string]interface{}{
 						"required": true,
 						"content": map[string]interface{}{
@@ -124,7 +125,7 @@ func GenerateOpenAPISpec(baseURL string) *OpenAPISpec {
 			"/api/v1/repos/{id}/git-receive-pack": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Run git-receive-pack",
-					"description": "Accepts push packfiles and updates refs. Requires repository write capability.",
+					"description": "Accepts push packfiles and updates refs. Requires repository write capability via a verified UCAN or session owner/collaborator membership.",
 					"security":    []map[string][]string{{"bearerAuth": []string{"repo:write"}}},
 					"parameters": []map[string]interface{}{
 						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
@@ -138,7 +139,7 @@ func GenerateOpenAPISpec(baseURL string) *OpenAPISpec {
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "Git receive-pack result stream"},
 						"401": map[string]interface{}{"description": "Authentication required"},
-						"403": map[string]interface{}{"description": "Write capability required"},
+						"403": map[string]interface{}{"description": "Write capability or session owner/collaborator membership required"},
 						"404": map[string]interface{}{"description": "Repository not found or private"},
 					},
 				},
@@ -160,7 +161,8 @@ func GenerateOpenAPISpec(baseURL string) *OpenAPISpec {
 				},
 				"post": map[string]interface{}{
 					"summary":     "Create issue",
-					"description": "Creates a new issue in a repository",
+					"description": "Creates a new issue in a repository. Requires repository write capability via a verified UCAN or session owner/collaborator membership.",
+					"security":    []map[string][]string{{"bearerAuth": []string{"repo:write"}}},
 					"parameters": []map[string]interface{}{
 						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
 					},

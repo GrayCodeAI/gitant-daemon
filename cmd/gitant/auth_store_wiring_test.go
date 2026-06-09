@@ -11,10 +11,11 @@ func TestNewServeAuthServiceUsesDurableSQLiteStores(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx := context.Background()
 
-	auth, closeAuth, err := newServeAuthService(dataDir)
+	serveStores, err := newServeSQLiteStores(dataDir)
 	if err != nil {
-		t.Fatalf("newServeAuthService failed: %v", err)
+		t.Fatalf("newServeSQLiteStores failed: %v", err)
 	}
+	auth := serveStores.AuthService
 
 	user, err := auth.Register(ctx, store.RegisterInput{
 		Username:    "durable-user",
@@ -33,15 +34,16 @@ func TestNewServeAuthServiceUsesDurableSQLiteStores(t *testing.T) {
 	if session.Token == "" {
 		t.Fatal("expected session token")
 	}
-	if closeAuth != nil {
-		closeAuth()
+	if serveStores.Close != nil {
+		serveStores.Close()
 	}
 
-	reopenedAuth, closeReopened, err := newServeAuthService(dataDir)
+	reopenedStores, err := newServeSQLiteStores(dataDir)
 	if err != nil {
-		t.Fatalf("reopen newServeAuthService failed: %v", err)
+		t.Fatalf("reopen newServeSQLiteStores failed: %v", err)
 	}
-	defer closeReopened()
+	defer reopenedStores.Close()
+	reopenedAuth := reopenedStores.AuthService
 
 	loggedIn, err := reopenedAuth.Login(ctx, store.LoginInput{Username: "durable-user", Password: "password123"})
 	if err != nil {

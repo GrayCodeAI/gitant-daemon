@@ -178,9 +178,9 @@ func RequireCapability(resource, action string) func(http.Handler) http.Handler 
 	}
 }
 
-// RequireRepoWriteCapability enforces repo:{id} write for all authenticated requests.
-// Both UCAN Bearer and HTTP Signature callers must present a valid UCAN with the
-// required repo write capability.
+// RequireRepoWriteCapability enforces repo:{id} write using UCAN capabilities only.
+// It is retained for UCAN-only routes and tests; session-capable repo mutation
+// groups should use RequireRepoWrite.
 func RequireRepoWriteCapability(paramName string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +190,63 @@ func RequireRepoWriteCapability(paramName string) func(http.Handler) http.Handle
 				return
 			}
 			RequireCapability("repo:"+repoID, "write")(next).ServeHTTP(w, r)
+		})
+	}
+}
+
+// RepoWriteAuthorizer resolves server-side session ownership and collaborator ACLs.
+type RepoWriteAuthorizer interface {
+	IsWriter(ctx context.Context, repoID, userID string) (bool, error)
+}
+
+// RequireRepoWrite enforces repo:{id}:write. Verified UCANs use the existing UCAN
+// capability path unchanged. If no UCAN is present, a session user may write only
+// when the repository ownership/collaborator store grants membership.
+func RequireRepoWrite(paramName string, authorizer RepoWriteAuthorizer) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			repoID := chi.URLParam(r, paramName)
+			if repoID == "" {
+				http.Error(w, "Repository ID required", http.StatusBadRequest)
+				return
+			}
+
+			if GetIdentity(r) == "" {
+				http.Error(w, "Authentication required", http.StatusUnauthorized)
+				return
+			}
+
+			ucan := GetUCAN(r)
+			if ucan != nil {
+				if !ucan.HasCapability("repo:"+repoID, "write") {
+					http.Error(w, "Insufficient capabilities", http.StatusForbidden)
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			user := GetUser(r)
+			if user == nil {
+				http.Error(w, "UCAN capability token required for this operation", http.StatusForbidden)
+				return
+			}
+			if authorizer == nil {
+				http.Error(w, "Repository ownership store unavailable", http.StatusForbidden)
+				return
+			}
+
+			allowed, err := authorizer.IsWriter(r.Context(), repoID, user.ID)
+			if err != nil {
+				http.Error(w, "Failed to check repository permissions", http.StatusInternalServerError)
+				return
+			}
+			if !allowed {
+				http.Error(w, "Repository write permission required", http.StatusForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
 		})
 	}
 }

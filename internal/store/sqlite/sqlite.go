@@ -179,6 +179,11 @@ func (s *Store) NewProtectionStore() *SQLProtectionStore {
 	return &SQLProtectionStore{db: s.db}
 }
 
+// NewRepoCollaboratorStore creates a SQLite-backed repo collaborator store.
+func (s *Store) NewRepoCollaboratorStore() *SQLRepoCollaboratorStore {
+	return &SQLRepoCollaboratorStore{db: s.db}
+}
+
 // NewReviewCommentStore creates a SQLite-backed review comment store
 func (s *Store) NewReviewCommentStore() *SQLReviewCommentStore {
 	return &SQLReviewCommentStore{db: s.db}

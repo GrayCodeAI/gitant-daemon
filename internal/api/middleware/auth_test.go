@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lakshmanpatel/gitant/internal/identity"
+	"github.com/lakshmanpatel/gitant/internal/store"
 )
 
 func TestRequireIdentity_NoIdentity(t *testing.T) {
@@ -369,6 +370,87 @@ func TestRequireRepoWriteCapability_DeniesReadOnlyUCAN(t *testing.T) {
 	req := httptest.NewRequest("POST", "/repos/my-repo/issues", nil)
 	ctx := context.WithValue(req.Context(), IdentityKey, "did:key:zagent")
 	ctx = context.WithValue(ctx, UCANKey, ucan)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
+	}
+}
+
+type stubRepoWriteAuthorizer struct {
+	allowed bool
+	err     error
+}
+
+func (s stubRepoWriteAuthorizer) IsWriter(_ context.Context, _, _ string) (bool, error) {
+	return s.allowed, s.err
+}
+
+func TestRequireRepoWrite_UCANPathUnchanged(t *testing.T) {
+	ucan := &identity.UCAN{
+		Issuer: "did:key:zagent",
+		Caps: []identity.Capability{
+			{Resource: "repo:my-repo", Actions: []string{"write"}},
+		},
+	}
+
+	r := chi.NewRouter()
+	r.Route("/repos/{id}", func(r chi.Router) {
+		r.Use(RequireRepoWrite("id", stubRepoWriteAuthorizer{}))
+		r.Post("/issues", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+		}))
+	})
+
+	req := httptest.NewRequest("POST", "/repos/my-repo/issues", nil)
+	ctx := context.WithValue(req.Context(), IdentityKey, "did:key:zagent")
+	ctx = context.WithValue(ctx, UCANKey, ucan)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", rec.Code)
+	}
+}
+
+func TestRequireRepoWrite_SessionMembershipAllowed(t *testing.T) {
+	r := chi.NewRouter()
+	r.Route("/repos/{id}", func(r chi.Router) {
+		r.Use(RequireRepoWrite("id", stubRepoWriteAuthorizer{allowed: true}))
+		r.Post("/issues", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+		}))
+	})
+
+	req := httptest.NewRequest("POST", "/repos/my-repo/issues", nil)
+	user := &store.User{ID: "user-1", Username: "owner"}
+	ctx := WithUser(req.Context(), user)
+	ctx = context.WithValue(ctx, IdentityKey, user.ID)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", rec.Code)
+	}
+}
+
+func TestRequireRepoWrite_SessionMembershipDenied(t *testing.T) {
+	r := chi.NewRouter()
+	r.Route("/repos/{id}", func(r chi.Router) {
+		r.Use(RequireRepoWrite("id", stubRepoWriteAuthorizer{allowed: false}))
+		r.Post("/issues", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+		}))
+	})
+
+	req := httptest.NewRequest("POST", "/repos/my-repo/issues", nil)
+	user := &store.User{ID: "user-1", Username: "stranger"}
+	ctx := WithUser(req.Context(), user)
+	ctx = context.WithValue(ctx, IdentityKey, user.ID)
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)

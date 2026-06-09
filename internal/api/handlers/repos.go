@@ -13,11 +13,12 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/application/ports"
 	"github.com/lakshmanpatel/gitant/internal/domain/models"
 	"github.com/lakshmanpatel/gitant/internal/storage"
+	"github.com/lakshmanpatel/gitant/internal/store"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
 // CreateRepo creates a new repository
-func CreateRepo(repoService ports.RepositoryService, wm *webhooks.Manager) http.HandlerFunc {
+func CreateRepo(repoService ports.RepositoryService, wm *webhooks.Manager, collaborators store.RepoCollaboratorStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name        string `json:"name"`
@@ -45,10 +46,9 @@ func CreateRepo(repoService ports.RepositoryService, wm *webhooks.Manager) http.
 		}
 
 		owner := middleware.GetIdentity(r)
-		if owner == "" {
-			if user := middleware.GetUser(r); user != nil {
-				owner = user.ID
-			}
+		user := middleware.GetUser(r)
+		if user != nil {
+			owner = user.ID
 		}
 		if owner == "" {
 			owner = "anonymous"
@@ -63,6 +63,18 @@ func CreateRepo(repoService ports.RepositoryService, wm *webhooks.Manager) http.
 		if err != nil {
 			http.Error(w, SanitizeError(err, "failed to create repository"), http.StatusConflict)
 			return
+		}
+
+		if user != nil && collaborators != nil {
+			if err := collaborators.Add(r.Context(), &store.RepoCollaborator{
+				RepoID: repo.ID,
+				UserID: user.ID,
+				Role:   store.RepoRoleOwner,
+			}); err != nil {
+				slog.Error("failed to record repository owner", "repo", repo.ID, "user", user.ID, "error", err)
+				http.Error(w, SanitizeError(err, "failed to record repository owner"), http.StatusInternalServerError)
+				return
+			}
 		}
 
 		// Dispatch webhook event
@@ -89,7 +101,7 @@ func CreateRepo(repoService ports.RepositoryService, wm *webhooks.Manager) http.
 }
 
 // ListRepos lists all repositories visible to the caller.
-func ListRepos(repoService ports.RepositoryService, serverDID string) http.HandlerFunc {
+func ListRepos(repoService ports.RepositoryService, serverDID string, collaborators middleware.RepoWriteAuthorizer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		offset, limit := ParsePagination(r)
 
@@ -113,7 +125,7 @@ func ListRepos(repoService ports.RepositoryService, serverDID string) http.Handl
 				Description: repo.Description,
 				Private:     repo.Private,
 			}
-			if !CanAccessRepo(r, entry, serverDID) {
+			if !CanAccessRepoWithCollaborators(r, entry, serverDID, collaborators) {
 				continue
 			}
 			result = append(result, map[string]interface{}{

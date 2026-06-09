@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,9 +13,16 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/application/service"
 	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/lakshmanpatel/gitant/internal/infrastructure/adapters"
+	"github.com/lakshmanpatel/gitant/internal/store"
 )
 
 func setupAuthIntegrationRouter(t *testing.T) (*chi.Mux, *identity.Identity) {
+	t.Helper()
+	r, serverID, _ := setupAuthIntegrationRouterWithACL(t)
+	return r, serverID
+}
+
+func setupAuthIntegrationRouterWithACL(t *testing.T) (*chi.Mux, *identity.Identity, store.RepoCollaboratorStore) {
 	t.Helper()
 
 	serverID, err := identity.NewIdentity()
@@ -38,13 +46,14 @@ func setupAuthIntegrationRouter(t *testing.T) (*chi.Mux, *identity.Identity) {
 	if _, err := reg.Create("private-repo", "private-repo", "secret", true); err != nil {
 		t.Fatal(err)
 	}
+	acl := store.NewMemoryRepoCollaboratorStore()
 
 	r := chi.NewRouter()
 	r.Use(authMiddleware.NewHTTPSignatureMiddleware(revocations, nil, serverID.DID))
 
 	r.Route("/api/v1/repos", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
-			r.Use(RequireRepoReadAccess(reg, serverID.DID))
+			r.Use(RequireRepoReadAccessWithCollaborators(reg, serverID.DID, acl))
 			r.Get("/{id}", GetRepo(repoService))
 			r.Get("/{id}/info/refs", InfoRefs(reg))
 			r.Post("/{id}/git-upload-pack", GitUploadPack(reg))
@@ -52,14 +61,14 @@ func setupAuthIntegrationRouter(t *testing.T) (*chi.Mux, *identity.Identity) {
 
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware.RequireIdentity)
-			r.Use(RequireRepoReadAccess(reg, serverID.DID))
-			r.Use(authMiddleware.RequireRepoWriteCapability("id"))
+			r.Use(RequireRepoReadAccessWithCollaborators(reg, serverID.DID, acl))
+			r.Use(authMiddleware.RequireRepoWrite("id", acl))
 			r.Post("/{id}/issues", CreateIssue(issueStore, wm))
 			r.Post("/{id}/git-receive-pack", GitReceivePack(reg, setupTestProtectionStore(t), wm))
 		})
 	})
 
-	return r, serverID
+	return r, serverID, acl
 }
 
 func signUCAN(t *testing.T, issuer *identity.Identity, audience, resource string, actions []string) string {
@@ -105,6 +114,23 @@ func TestAuthIntegration_WriteDeniedWithReadOnlyUCAN(t *testing.T) {
 	r, serverID := setupAuthIntegrationRouter(t)
 
 	token := signUCAN(t, serverID, serverID.DID, "repo:public-repo", []string{"read"})
+
+	body := bytes.NewBufferString(`{"title":"blocked","body":""}`)
+	req := httptest.NewRequest("POST", "/api/v1/repos/public-repo/issues", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAuthIntegration_WriteDeniedWithUCANScopedToDifferentRepo(t *testing.T) {
+	r, serverID := setupAuthIntegrationRouter(t)
+
+	token := signUCAN(t, serverID, serverID.DID, "repo:other-repo", []string{"write"})
 
 	body := bytes.NewBufferString(`{"title":"blocked","body":""}`)
 	req := httptest.NewRequest("POST", "/api/v1/repos/public-repo/issues", body)
@@ -246,5 +272,57 @@ func TestAuthIntegration_ReceivePackStillRequiresWriteCapability(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected receive-pack with read-only UCAN to require write capability, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAuthIntegration_SessionOwnerAndCollaboratorCanWrite(t *testing.T) {
+	r, _, acl := setupAuthIntegrationRouterWithACL(t)
+	owner := &store.User{ID: "owner-user", Username: "owner"}
+	collaborator := &store.User{ID: "collab-user", Username: "collab"}
+	if err := acl.Add(context.Background(), &store.RepoCollaborator{RepoID: "public-repo", UserID: owner.ID, Role: store.RepoRoleOwner}); err != nil {
+		t.Fatal(err)
+	}
+	if err := acl.Add(context.Background(), &store.RepoCollaborator{RepoID: "public-repo", UserID: collaborator.ID, Role: store.RepoRoleCollaborator}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		user *store.User
+	}{
+		{name: "owner", user: owner},
+		{name: "collaborator", user: collaborator},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := bytes.NewBufferString(`{"title":"session issue","body":"hello"}`)
+			req := httptest.NewRequest("POST", "/api/v1/repos/public-repo/issues", body)
+			req.Header.Set("Content-Type", "application/json")
+			ctx := authMiddleware.WithUser(req.Context(), tc.user)
+			ctx = context.WithValue(ctx, authMiddleware.IdentityKey, tc.user.ID)
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuthIntegration_SessionNonOwnerCannotWrite(t *testing.T) {
+	r, _, _ := setupAuthIntegrationRouterWithACL(t)
+	user := &store.User{ID: "stranger-user", Username: "stranger"}
+
+	body := bytes.NewBufferString(`{"title":"blocked","body":""}`)
+	req := httptest.NewRequest("POST", "/api/v1/repos/public-repo/issues", body)
+	req.Header.Set("Content-Type", "application/json")
+	ctx := authMiddleware.WithUser(req.Context(), user)
+	ctx = context.WithValue(ctx, authMiddleware.IdentityKey, user.ID)
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
 	}
 }

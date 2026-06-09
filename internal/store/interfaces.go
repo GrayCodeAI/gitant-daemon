@@ -196,6 +196,39 @@ type Session struct {
 	CreatedAt time.Time
 }
 
+const (
+	// RepoRoleOwner identifies the session user who created or owns a repository.
+	RepoRoleOwner = "owner"
+	// RepoRoleCollaborator identifies a session user allowed to write to a repository.
+	RepoRoleCollaborator = "collaborator"
+)
+
+// RepoCollaborator represents a user's repo ownership or collaborator membership.
+type RepoCollaborator struct {
+	RepoID    string
+	UserID    string
+	Role      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// CanWrite reports whether this membership grants repository write access.
+func (c *RepoCollaborator) CanWrite() bool {
+	if c == nil {
+		return false
+	}
+	return c.Role == RepoRoleOwner || c.Role == RepoRoleCollaborator
+}
+
+// RepoCollaboratorStore defines the interface for repository ownership and collaborator storage.
+type RepoCollaboratorStore interface {
+	Add(ctx context.Context, collaborator *RepoCollaborator) error
+	Get(ctx context.Context, repoID, userID string) (*RepoCollaborator, error)
+	ListByRepo(ctx context.Context, repoID string) ([]*RepoCollaborator, error)
+	Remove(ctx context.Context, repoID, userID string) error
+	IsWriter(ctx context.Context, repoID, userID string) (bool, error)
+}
+
 // ReviewCommentStore defines the interface for PR review comments
 type ReviewCommentStore interface {
 	Create(ctx context.Context, comment *ReviewComment) error

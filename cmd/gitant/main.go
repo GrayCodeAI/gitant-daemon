@@ -31,19 +31,29 @@ var rootCmd = &cobra.Command{
 	Long:  "gitant is a decentralized git hosting platform for solo developers and AI agents.",
 }
 
-func newServeAuthService(dataStoreDir string) (*store.AuthService, func(), error) {
+type serveSQLiteStores struct {
+	AuthService       *store.AuthService
+	RepoCollaborators store.RepoCollaboratorStore
+	Close             func()
+}
+
+func newServeSQLiteStores(dataStoreDir string) (*serveSQLiteStores, error) {
 	sqliteStore, err := sqlitepkg.NewStore(dataStoreDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	closeFn := func() {
 		if err := sqliteStore.Close(); err != nil {
-			slog.Warn("failed to close auth SQLite store", "error", err)
+			slog.Warn("failed to close serve SQLite store", "error", err)
 		}
 	}
 
-	return store.NewAuthService(sqliteStore.NewUserStore(), sqliteStore.NewSessionStore()), closeFn, nil
+	return &serveSQLiteStores{
+		AuthService:       store.NewAuthService(sqliteStore.NewUserStore(), sqliteStore.NewSessionStore()),
+		RepoCollaborators: sqliteStore.NewRepoCollaboratorStore(),
+		Close:             closeFn,
+	}, nil
 }
 
 var serveCmd = &cobra.Command{
@@ -184,14 +194,15 @@ var serveCmd = &cobra.Command{
 		// Create server
 		server := api.NewServer(port, id, repos, issueStore, prStore, blockstore, labelStore, taskStore, releaseStore, protectionStore, webhookManager, revocationStore, dataStoreDir, corsOrigins)
 
-		// Wire up auth service with SQLite-backed durable user and session stores.
-		authService, closeAuthStore, err := newServeAuthService(dataStoreDir)
+		// Wire up SQLite-backed durable user, session, and repo collaborator stores.
+		serveStores, err := newServeSQLiteStores(dataStoreDir)
 		if err != nil {
-			slog.Error("failed to create auth stores", "error", err)
+			slog.Error("failed to create serve SQLite stores", "error", err)
 			os.Exit(1)
 		}
-		defer closeAuthStore()
-		server.SetAuthService(authService)
+		defer serveStores.Close()
+		server.SetRepoCollaboratorStore(serveStores.RepoCollaborators)
+		server.SetAuthService(serveStores.AuthService)
 
 		p2pEnabled, _ := cmd.Flags().GetBool("p2p")
 		if envP2P := os.Getenv("GITANT_P2P"); envP2P != "" {

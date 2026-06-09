@@ -44,8 +44,8 @@ func setupWorkflowRouter(t *testing.T) (*chi.Mux, *storage.RepositoryRegistry, *
 	repoService := factory.CreateRepositoryService()
 
 	// Repo CRUD (using services)
-	r.Post("/repos", CreateRepo(repoService, wm))
-	r.Get("/repos", ListRepos(repoService, ""))
+	r.Post("/repos", CreateRepo(repoService, wm, nil))
+	r.Get("/repos", ListRepos(repoService, "", nil))
 	r.Get("/repos/{id}", GetRepo(repoService))
 	r.Delete("/repos/{id}", DeleteRepo(reg, wm)) // DeleteRepo still uses registry (TODO: add to service)
 

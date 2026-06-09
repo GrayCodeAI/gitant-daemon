@@ -20,6 +20,7 @@ import (
 	"github.com/lakshmanpatel/gitant/internal/identity"
 	"github.com/lakshmanpatel/gitant/internal/infrastructure/adapters"
 	"github.com/lakshmanpatel/gitant/internal/storage"
+	"github.com/lakshmanpatel/gitant/internal/store"
 	"github.com/lakshmanpatel/gitant/internal/webhooks"
 )
 
@@ -76,11 +77,14 @@ func TestCreateRepo(t *testing.T) {
 	reg := setupTestRegistry(t)
 	wm := setupTestWebhookManager(t)
 	repoService := setupTestRepoService(t, reg)
-	handler := CreateRepo(repoService, wm)
+	acl := store.NewMemoryRepoCollaboratorStore()
+	handler := CreateRepo(repoService, wm, acl)
+	user := &store.User{ID: "user-1", Username: "owner"}
 
 	body := `{"name":"test-repo","description":"A test","private":false}`
 	req := httptest.NewRequest("POST", "/", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(authMiddleware.WithUser(req.Context(), user))
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -94,13 +98,20 @@ func TestCreateRepo(t *testing.T) {
 	if result["name"] != "test-repo" {
 		t.Fatalf("expected name=test-repo, got %v", result["name"])
 	}
+	collaborator, err := acl.Get(context.Background(), "test-repo", user.ID)
+	if err != nil {
+		t.Fatalf("expected repo owner to be recorded: %v", err)
+	}
+	if collaborator.Role != store.RepoRoleOwner {
+		t.Fatalf("expected owner role, got %q", collaborator.Role)
+	}
 }
 
 func TestCreateRepoMissingName(t *testing.T) {
 	reg := setupTestRegistry(t)
 	wm := setupTestWebhookManager(t)
 	repoService := setupTestRepoService(t, reg)
-	handler := CreateRepo(repoService, wm)
+	handler := CreateRepo(repoService, wm, nil)
 
 	body := `{"description":"no name"}`
 	req := httptest.NewRequest("POST", "/", bytes.NewBufferString(body))
@@ -120,7 +131,7 @@ func TestListRepos(t *testing.T) {
 	reg.Create("repo2", "repo2", "second", true)
 
 	repoService := setupTestRepoService(t, reg)
-	handler := ListRepos(repoService, "")
+	handler := ListRepos(repoService, "", nil)
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
 
