@@ -86,6 +86,63 @@ func GenerateOpenAPISpec(baseURL string) *OpenAPISpec {
 					},
 				},
 			},
+			"/api/v1/repos/{id}/info/refs": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary":     "Advertise git smart HTTP refs",
+					"description": "Advertises refs for git-upload-pack or git-receive-pack. Public repositories are readable anonymously; private repositories require read access.",
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+						{"name": "service", "in": "query", "required": true, "schema": map[string]interface{}{"type": "string", "enum": []string{"git-upload-pack", "git-receive-pack"}}},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Git smart HTTP ref advertisement"},
+						"400": map[string]interface{}{"description": "Unsupported service"},
+						"404": map[string]interface{}{"description": "Repository not found or private"},
+					},
+				},
+			},
+			"/api/v1/repos/{id}/git-upload-pack": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary":     "Run git-upload-pack",
+					"description": "Streams a packfile for fetch/clone. Public repositories are readable anonymously; private repositories require read access, not write capability.",
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/x-git-upload-pack-request": map[string]interface{}{"schema": map[string]string{"type": "string", "format": "binary"}},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Git upload-pack result stream"},
+						"400": map[string]interface{}{"description": "Malformed upload-pack request"},
+						"404": map[string]interface{}{"description": "Repository not found or private"},
+					},
+				},
+			},
+			"/api/v1/repos/{id}/git-receive-pack": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary":     "Run git-receive-pack",
+					"description": "Accepts push packfiles and updates refs. Requires repository write capability.",
+					"security":    []map[string][]string{{"bearerAuth": []string{"repo:write"}}},
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/x-git-receive-pack-request": map[string]interface{}{"schema": map[string]string{"type": "string", "format": "binary"}},
+						},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Git receive-pack result stream"},
+						"401": map[string]interface{}{"description": "Authentication required"},
+						"403": map[string]interface{}{"description": "Write capability required"},
+						"404": map[string]interface{}{"description": "Repository not found or private"},
+					},
+				},
+			},
 			"/api/v1/repos/{id}/issues": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "List issues",
