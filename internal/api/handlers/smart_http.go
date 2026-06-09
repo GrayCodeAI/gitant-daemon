@@ -102,7 +102,8 @@ func GitUploadPack(registry *storage.RepositoryRegistry) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 		w.Header().Set("Cache-Control", "no-cache")
 
-		// Write "packfile\n" prefix then the data
+		// Upload-pack must acknowledge negotiation before streaming side-band data.
+		w.Write([]byte(git.PktLine("NAK\n")))
 		writer := newSidebandWriter(w)
 		writer.Write(packData)
 		writer.Close()
@@ -365,13 +366,21 @@ func parsePktLines(data string) []string {
 
 // collectObjectsForWants collects all objects reachable from wants but not from haves.
 func collectObjectsForWants(repo *storage.Repository, wants, haves []string) []plumbing.Hash {
-	seen := make(map[string]bool)
+	haveReachable := make(map[string]bool)
 	for _, have := range haves {
-		collectReachableObjects(repo, plumbing.NewHash(have), seen, nil)
+		collectReachableObjects(repo, plumbing.NewHash(have), haveReachable, nil)
+	}
+
+	seen := make(map[string]bool, len(haveReachable))
+	for hash := range haveReachable {
+		seen[hash] = true
 	}
 
 	var objects []plumbing.Hash
 	for _, want := range wants {
+		if haveReachable[want] {
+			continue
+		}
 		collectReachableObjects(repo, plumbing.NewHash(want), seen, &objects)
 	}
 	return objects

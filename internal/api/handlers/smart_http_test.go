@@ -75,6 +75,50 @@ func TestGitUploadPackWithTipHaveReturnsMinimalPack(t *testing.T) {
 	}
 }
 
+func TestGitUploadPackWithBaseHaveReturnsOnlyNewObjects(t *testing.T) {
+	reg := setupTestRegistry(t)
+	if _, err := reg.Create("repo", "repo", "", false); err != nil {
+		t.Fatal(err)
+	}
+	repo := openTestRepo(t, reg, "repo")
+	base := createTestCommit(t, repo, "base.txt", "base", nil)
+	tip := createTestCommit(t, repo, "tip.txt", "tip", []plumbing.Hash{base.Commit})
+	if err := repo.UpdateRef("refs/heads/main", tip.Commit); err != nil {
+		t.Fatal(err)
+	}
+
+	r := chiRouter()
+	r.Post("/{id}/git-upload-pack", GitUploadPack(reg))
+	requestBody := git.PktLinef("want %s\n", tip.Commit) + git.PktLinef("have %s\n", base.Commit) + git.FlushPacket() + git.PktLine("done\n")
+	req := httptest.NewRequest("POST", "/repo/git-upload-pack", bytes.NewBufferString(requestBody))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected upload-pack success, got %d: %s", w.Code, w.Body.String())
+	}
+
+	packData := decodeTestSidebandPackfile(t, w.Body.Bytes())
+	objects, err := storage.ExtractObjects(packData)
+	if err != nil {
+		t.Fatalf("expected parseable packfile: %v", err)
+	}
+	objectSet := make(map[string]bool, len(objects))
+	for _, object := range objects {
+		objectSet[object.Hash.String()] = true
+	}
+
+	for _, excluded := range []plumbing.Hash{base.Commit, base.Tree, base.Blob} {
+		if objectSet[excluded.String()] {
+			t.Fatalf("expected have-reachable object %s to be pruned, got objects %v", excluded, objects)
+		}
+	}
+	for _, included := range []plumbing.Hash{tip.Commit, tip.Tree, tip.Blob} {
+		if !objectSet[included.String()] {
+			t.Fatalf("expected new wanted object %s in pack, got objects %v", included, objects)
+		}
+	}
+}
+
 func TestGitReceivePackReportsMixedOKAndNGStatus(t *testing.T) {
 	reg := setupReceivePackRepo(t)
 	protection := setupTestProtectionStore(t)
@@ -300,6 +344,15 @@ func postReceivePack(t *testing.T, reg *storage.RepositoryRegistry, protection *
 
 func decodeTestSidebandPackfile(t *testing.T, data []byte) []byte {
 	t.Helper()
+	lines := parsePktLines(string(data))
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "NAK" {
+		t.Fatalf("expected upload-pack response to start with NAK, got %q", lines)
+	}
+	if len(data) < len(git.PktLine("NAK\n")) {
+		t.Fatalf("truncated NAK pkt-line in %q", data)
+	}
+	data = data[len(git.PktLine("NAK\n")):]
+
 	var pack bytes.Buffer
 	for len(data) > 0 {
 		if len(data) < 4 {

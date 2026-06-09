@@ -161,6 +161,12 @@ func seedPublicRepoCommit(t *testing.T, reg *storage.RepositoryRegistry) plumbin
 func decodeSidebandPackfile(t *testing.T, data []byte) []byte {
 	t.Helper()
 
+	ack := []byte(gitproto.PktLine("NAK\n"))
+	if !bytes.HasPrefix(data, ack) {
+		t.Fatalf("expected upload-pack response to start with NAK, got %q", data[:min(len(data), 16)])
+	}
+	data = data[len(ack):]
+
 	var pack bytes.Buffer
 	for len(data) > 0 {
 		if len(data) < 4 {
