@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -476,14 +478,14 @@ func bodySizeLimit(maxBytes int64) func(http.Handler) http.Handler {
 	}
 }
 
-func (s *Server) setupMiddleware() {
-	s.router.Use(requestLogger)
-	s.router.Use(middleware.Recoverer)
-	s.router.Use(bodySizeLimit(10 << 20))
-	s.router.Use(middleware.RequestID)
-	origins := s.corsOrigins
+func configuredCORSOrigins(origins []string) []string {
 	if len(origins) == 0 {
-		origins = []string{
+		if envOrigins := os.Getenv("GITANT_CORS_ORIGINS"); envOrigins != "" {
+			origins = parseCORSOrigins(envOrigins)
+		}
+	}
+	if len(origins) == 0 {
+		return []string{
 			"http://localhost:3303",
 			"http://localhost:3456",
 			"http://localhost:3000",
@@ -491,6 +493,52 @@ func (s *Server) setupMiddleware() {
 			"https://app.gitant.dev",
 		}
 	}
+	return productionCORSOrigins(origins)
+}
+
+func parseCORSOrigins(raw string) []string {
+	parts := strings.Split(raw, ",")
+	origins := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if origin := strings.TrimSpace(part); origin != "" {
+			origins = append(origins, origin)
+		}
+	}
+	return origins
+}
+
+func productionCORSOrigins(origins []string) []string {
+	allowed := make([]string, 0, len(origins))
+	seen := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		origin = strings.TrimSpace(origin)
+		if origin == "" || origin == "*" || isLocalCORSOrigin(origin) {
+			continue
+		}
+		if _, ok := seen[origin]; ok {
+			continue
+		}
+		seen[origin] = struct{}{}
+		allowed = append(allowed, origin)
+	}
+	return allowed
+}
+
+func isLocalCORSOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := parsed.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func (s *Server) setupMiddleware() {
+	s.router.Use(requestLogger)
+	s.router.Use(middleware.Recoverer)
+	s.router.Use(bodySizeLimit(10 << 20))
+	s.router.Use(middleware.RequestID)
+	origins := configuredCORSOrigins(s.corsOrigins)
 	s.router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   origins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
