@@ -330,6 +330,22 @@ func (s *Server) SetReviewStore(reviewStore store.ReviewCommentStore) {
 	s.reviewStore = reviewStore
 }
 
+func (s *Server) resolveCollaboratorUser(ctx context.Context, userID, username string) (*store.User, error) {
+	if s.authService == nil || s.authService.Users == nil {
+		return nil, fmt.Errorf("user store unavailable")
+	}
+	if userID != "" {
+		user, err := s.authService.Users.Get(ctx, userID)
+		if err == nil {
+			return user, nil
+		}
+		if username == "" {
+			username = userID
+		}
+	}
+	return s.authService.Users.GetByUsername(ctx, username)
+}
+
 // SetRepoCollaboratorStore sets the repo ownership and collaborator store.
 func (s *Server) SetRepoCollaboratorStore(repoACLStore store.RepoCollaboratorStore) {
 	s.repoACLStore = repoACLStore
@@ -564,6 +580,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/{id}/tasks", handlers.ListTasks(s.tasks))
 			r.Get("/{id}/releases", handlers.ListReleases(s.releases))
 			r.Get("/{id}/releases/{releaseId}", handlers.GetRelease(s.releases))
+			r.Get("/{id}/collaborators", handlers.ListCollaborators(s))
 		})
 
 		// Authenticated mutating endpoints (repo creation — no repo id yet)
@@ -607,6 +624,8 @@ func (s *Server) setupRoutes() {
 			r.Post("/{id}/tasks/{taskId}/complete", handlers.CompleteTask(s.tasks, s.webhooks))
 			r.Post("/{id}/releases", handlers.CreateRelease(s.releases, s.webhooks))
 			r.Delete("/{id}/releases/{releaseId}", handlers.DeleteRelease(s.releases, s.webhooks))
+			r.Post("/{id}/collaborators", handlers.AddCollaborator(s, s.resolveCollaboratorUser))
+			r.Delete("/{id}/collaborators/{user}", handlers.RemoveCollaborator(s))
 		})
 	})
 

@@ -144,6 +144,69 @@ func GenerateOpenAPISpec(baseURL string) *OpenAPISpec {
 					},
 				},
 			},
+			"/api/v1/repos/{id}/collaborators": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary":     "List repository collaborators",
+					"description": "Lists repository owner and collaborator memberships. Private repositories require read access.",
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Repository collaborators"},
+						"404": map[string]interface{}{"description": "Repository not found or private"},
+					},
+				},
+				"post": map[string]interface{}{
+					"summary":     "Add repository collaborator",
+					"description": "Adds or updates a collaborator membership. Requires repository write capability via a verified UCAN or session owner/collaborator membership.",
+					"security":    []map[string][]string{{"bearerAuth": []string{"repo:write"}}},
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"schema": map[string]interface{}{
+									"type": "object",
+									"properties": map[string]interface{}{
+										"user_id":  map[string]string{"type": "string"},
+										"username": map[string]string{"type": "string"},
+										"user":     map[string]string{"type": "string", "description": "User ID or username"},
+										"role":     map[string]interface{}{"type": "string", "enum": []string{"collaborator"}},
+									},
+									"required": []string{"user_id"},
+								},
+							},
+						},
+					},
+					"responses": map[string]interface{}{
+						"201": map[string]interface{}{"description": "Collaborator added"},
+						"400": map[string]interface{}{"description": "Invalid request"},
+						"401": map[string]interface{}{"description": "Authentication required"},
+						"403": map[string]interface{}{"description": "Write capability or session owner/collaborator membership required"},
+						"404": map[string]interface{}{"description": "Repository not found or private"},
+					},
+				},
+			},
+			"/api/v1/repos/{id}/collaborators/{user}": map[string]interface{}{
+				"delete": map[string]interface{}{
+					"summary":     "Remove repository collaborator",
+					"description": "Removes a collaborator membership. Requires repository write capability via a verified UCAN or session owner/collaborator membership.",
+					"security":    []map[string][]string{{"bearerAuth": []string{"repo:write"}}},
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+						{"name": "user", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Collaborator removed"},
+						"400": map[string]interface{}{"description": "Invalid request"},
+						"401": map[string]interface{}{"description": "Authentication required"},
+						"403": map[string]interface{}{"description": "Write capability or session owner/collaborator membership required"},
+						"404": map[string]interface{}{"description": "Repository or collaborator not found"},
+					},
+				},
+			},
 			"/api/v1/repos/{id}/issues": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "List issues",

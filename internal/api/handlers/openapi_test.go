@@ -31,6 +31,35 @@ func TestOpenAPISpecSmartHTTPReflectsReadAndWriteGrouping(t *testing.T) {
 	}
 }
 
+func TestOpenAPISpecIncludesCollaboratorManagementRoutes(t *testing.T) {
+	spec := GenerateOpenAPISpec("http://localhost:7777")
+
+	list := pathOperation(t, spec, "/api/v1/repos/{id}/collaborators", "get")
+	if summary, _ := list["summary"].(string); summary != "List repository collaborators" {
+		t.Fatalf("unexpected collaborator list summary: %q", summary)
+	}
+
+	add := pathOperation(t, spec, "/api/v1/repos/{id}/collaborators", "post")
+	if summary, _ := add["summary"].(string); summary != "Add repository collaborator" {
+		t.Fatalf("unexpected collaborator add summary: %q", summary)
+	}
+	assertRepoWriteSecurity(t, add)
+
+	remove := pathOperation(t, spec, "/api/v1/repos/{id}/collaborators/{user}", "delete")
+	if summary, _ := remove["summary"].(string); summary != "Remove repository collaborator" {
+		t.Fatalf("unexpected collaborator remove summary: %q", summary)
+	}
+	assertRepoWriteSecurity(t, remove)
+}
+
+func assertRepoWriteSecurity(t *testing.T, op map[string]interface{}) {
+	t.Helper()
+	security, ok := op["security"].([]map[string][]string)
+	if !ok || len(security) == 0 || len(security[0]["bearerAuth"]) == 0 || security[0]["bearerAuth"][0] != "repo:write" {
+		t.Fatalf("operation should document write security, got %#v", op["security"])
+	}
+}
+
 func pathOperation(t *testing.T, spec *OpenAPISpec, path, method string) map[string]interface{} {
 	t.Helper()
 

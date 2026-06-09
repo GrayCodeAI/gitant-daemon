@@ -57,6 +57,7 @@ func setupAuthIntegrationRouterWithACL(t *testing.T) (*chi.Mux, *identity.Identi
 			r.Get("/{id}", GetRepo(repoService))
 			r.Get("/{id}/info/refs", InfoRefs(reg))
 			r.Post("/{id}/git-upload-pack", GitUploadPack(reg))
+			r.Get("/{id}/collaborators", ListCollaborators(acl))
 		})
 
 		r.Group(func(r chi.Router) {
@@ -65,6 +66,8 @@ func setupAuthIntegrationRouterWithACL(t *testing.T) (*chi.Mux, *identity.Identi
 			r.Use(authMiddleware.RequireRepoWrite("id", acl))
 			r.Post("/{id}/issues", CreateIssue(issueStore, wm))
 			r.Post("/{id}/git-receive-pack", GitReceivePack(reg, setupTestProtectionStore(t), wm))
+			r.Post("/{id}/collaborators", AddCollaborator(acl))
+			r.Delete("/{id}/collaborators/{user}", RemoveCollaborator(acl))
 		})
 	})
 
@@ -325,4 +328,104 @@ func TestAuthIntegration_SessionNonOwnerCannotWrite(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
 	}
+}
+
+func TestAuthIntegration_CollaboratorManagementAllowsOwnerToGrantAndRevokeWrite(t *testing.T) {
+	r, _, acl := setupAuthIntegrationRouterWithACL(t)
+	owner := &store.User{ID: "owner-user", Username: "owner"}
+	collaborator := &store.User{ID: "collab-user", Username: "collab"}
+	if err := acl.Add(context.Background(), &store.RepoCollaborator{RepoID: "public-repo", UserID: owner.ID, Role: store.RepoRoleOwner}); err != nil {
+		t.Fatal(err)
+	}
+
+	addBody := bytes.NewBufferString(`{"user_id":"collab-user"}`)
+	req := httptest.NewRequest("POST", "/api/v1/repos/public-repo/collaborators", addBody)
+	req.Header.Set("Content-Type", "application/json")
+	req = requestWithSessionUser(req, owner)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected owner add collaborator 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", "/api/v1/repos/public-repo/collaborators", nil)
+	req = requestWithSessionUser(req, owner)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected collaborator list 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("collab-user")) {
+		t.Fatalf("expected list to include collab-user, got %s", w.Body.String())
+	}
+
+	issueBody := bytes.NewBufferString(`{"title":"from collaborator","body":"hello"}`)
+	req = httptest.NewRequest("POST", "/api/v1/repos/public-repo/issues", issueBody)
+	req.Header.Set("Content-Type", "application/json")
+	req = requestWithSessionUser(req, collaborator)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected collaborator session write 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("DELETE", "/api/v1/repos/public-repo/collaborators/collab-user", nil)
+	req = requestWithSessionUser(req, owner)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected owner remove collaborator 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	issueBody = bytes.NewBufferString(`{"title":"after removal","body":"blocked"}`)
+	req = httptest.NewRequest("POST", "/api/v1/repos/public-repo/issues", issueBody)
+	req.Header.Set("Content-Type", "application/json")
+	req = requestWithSessionUser(req, collaborator)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected removed collaborator write 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAuthIntegration_CollaboratorManagementRequiresWriteCapability(t *testing.T) {
+	r, _, acl := setupAuthIntegrationRouterWithACL(t)
+	owner := &store.User{ID: "owner-user", Username: "owner"}
+	stranger := &store.User{ID: "stranger-user", Username: "stranger"}
+	if err := acl.Add(context.Background(), &store.RepoCollaborator{RepoID: "public-repo", UserID: owner.ID, Role: store.RepoRoleOwner}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"user_id":"collab-user"}`)
+	req := httptest.NewRequest("POST", "/api/v1/repos/public-repo/collaborators", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected anonymous add 401, got %d: %s", w.Code, w.Body.String())
+	}
+
+	body = bytes.NewBufferString(`{"user_id":"collab-user"}`)
+	req = httptest.NewRequest("POST", "/api/v1/repos/public-repo/collaborators", body)
+	req.Header.Set("Content-Type", "application/json")
+	req = requestWithSessionUser(req, stranger)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected stranger add 403, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("DELETE", "/api/v1/repos/public-repo/collaborators/collab-user", nil)
+	req = requestWithSessionUser(req, stranger)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected stranger delete 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func requestWithSessionUser(req *http.Request, user *store.User) *http.Request {
+	ctx := authMiddleware.WithUser(req.Context(), user)
+	ctx = context.WithValue(ctx, authMiddleware.IdentityKey, user.ID)
+	return req.WithContext(ctx)
 }
