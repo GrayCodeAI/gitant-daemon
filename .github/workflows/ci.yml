@@ -9,8 +9,8 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
 
@@ -21,7 +21,7 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.2.0
           install-mode: goinstall
@@ -30,7 +30,7 @@ jobs:
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage
           path: coverage.out
@@ -42,7 +42,7 @@ jobs:
           ./gitant version | grep -q gitant
 
       - name: Goreleaser snapshot
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --snapshot --clean
@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: lint-and-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build Docker image
         run: docker build -t gitant:latest .
 
@@ -72,8 +72,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: lint-and-test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
       - name: Block exchange unit test
