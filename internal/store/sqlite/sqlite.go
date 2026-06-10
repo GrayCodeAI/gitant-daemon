@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"embed"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,8 +13,13 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite"
+	"github.com/golang-migrate/migrate/v4/source"
 	"github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
+
+//go:embed migrations/*.sql
+var embeddedMigrations embed.FS
 
 // Store represents a SQLite-backed store
 type Store struct {
@@ -95,15 +101,20 @@ func (s *Store) runMigrations() error {
 
 	// Use file:// source for migrations.
 	migrationsDir, err := resolveMigrationsDir()
-	if err != nil {
-		return err
-	}
-	migrationsPath := "file://" + migrationsDir
+	var src source.Driver
+	if err == nil {
+		migrationsPath := "file://" + migrationsDir
 
-	fileDriver := &file.File{}
-	src, err := fileDriver.Open(migrationsPath)
-	if err != nil {
-		return fmt.Errorf("creating migration source: %w", err)
+		fileDriver := &file.File{}
+		src, err = fileDriver.Open(migrationsPath)
+		if err != nil {
+			return fmt.Errorf("creating migration source: %w", err)
+		}
+	} else {
+		src, err = iofs.New(embeddedMigrations, "migrations")
+		if err != nil {
+			return fmt.Errorf("creating embedded migration source: %w", err)
+		}
 	}
 
 	m, err := migrate.NewWithInstance("file", src, "sqlite", driver)
